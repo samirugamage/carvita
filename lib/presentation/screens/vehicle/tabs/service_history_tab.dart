@@ -11,7 +11,12 @@ import 'package:carvita/presentation/manager/locale_provider.dart';
 import 'package:carvita/presentation/manager/maintenance_plan/maintenance_plan_cubit.dart';
 import 'package:carvita/presentation/manager/service_log/service_log_cubit.dart';
 import 'package:carvita/presentation/manager/service_log/service_log_state.dart';
+import 'package:carvita/presentation/manager/fuel_records/fuel_records_cubit.dart';
+import 'package:carvita/presentation/manager/fuel_records/fuel_records_state.dart';
+import 'package:carvita/presentation/screens/fuel/fuel_records_list_section.dart';
 import 'package:carvita/presentation/manager/upcoming_maintenance/upcoming_maintenance_cubit.dart';
+import 'package:carvita/data/repositories/fuel_repository.dart';
+import 'package:carvita/data/sources/local/database_helper.dart';
 
 class ServiceHistoryTab extends StatefulWidget {
   final int vehicleId;
@@ -369,7 +374,36 @@ class _ServiceHistoryTabState extends State<ServiceHistoryTab> {
                                     ],
                               ),
                             ],
-                          ),
+      
+              const SizedBox(height: 24),
+              Divider(),
+              Padding(
+                padding: EdgeInsets.only(top: 12.0, bottom: 8.0),
+                child: Text(
+                  'Fuel Records',
+                  style: TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w500,
+                    color: Theme.of(context).colorScheme.onSurface,
+                  ),
+                ),
+              ),
+              // Actions and list (shrink-wrapped) embedded into Service History
+              BlocProvider(
+                create: (_) => FuelRecordsCubit(
+                  repo: FuelRepository(dbHelper: DatabaseHelper()),
+                  vehicleId: widget.vehicleId,
+                )..load(),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    FuelRecordsActionsRow(vehicleId: widget.vehicleId),
+                    const SizedBox(height: 8),
+                    FuelRecordsListSection(vehicleId: widget.vehicleId),
+                  ],
+                ),
+              ),
+                    ),
                         ),
                       );
                     },
