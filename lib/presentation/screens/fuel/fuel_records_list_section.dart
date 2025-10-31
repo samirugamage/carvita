@@ -1,9 +1,6 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:csv/csv.dart';
 import 'package:intl/intl.dart';
 
 import 'package:carvita/data/models/fuel_record.dart';
@@ -15,8 +12,8 @@ import 'package:carvita/presentation/manager/fuel_records/fuel_records_state.dar
 
 import 'fuel_record_edit_screen.dart';
 
-/// A shrink-wrapped, non-scrolling list section intended to be embedded
-/// inside an existing SingleChildScrollView (like the Service History tab).
+/// A shrink-wrapped section intended to be embedded inside an existing
+/// SingleChildScrollView (for example, the Service History tab).
 class FuelRecordsListSection extends StatelessWidget {
   final int vehicleId;
 
@@ -29,7 +26,17 @@ class FuelRecordsListSection extends StatelessWidget {
         repo: FuelRepository(dbHelper: DatabaseHelper()),
         vehicleId: vehicleId,
       )..load(),
-      child: const _FuelRecordsListView(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: const [
+          // Buttons row (Import CSV, Add)
+          _FuelRecordsActionsRow(),
+          SizedBox(height: 8),
+          // List of records
+          _FuelRecordsListView(),
+        ],
+      ),
     );
   }
 }
@@ -42,21 +49,29 @@ class _FuelRecordsListView extends StatelessWidget {
     return BlocBuilder<FuelRecordsCubit, FuelRecordsState>(
       builder: (context, state) {
         if (state.loading) {
-          return const Center(child: Padding(
-            padding: EdgeInsets.symmetric(vertical: 12.0),
-            child: CircularProgressIndicator(),
-          ));
+          return const Center(
+            child: Padding(
+              padding: EdgeInsets.symmetric(vertical: 12.0),
+              child: CircularProgressIndicator(),
+            ),
+          );
         }
         if (state.error != null) {
           return Padding(
             padding: const EdgeInsets.symmetric(vertical: 12.0),
-            child: Text('Error: ${state.error}', style: TextStyle(color: Theme.of(context).colorScheme.error)),
+            child: Text(
+              'Error: ${state.error}',
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
           );
         }
         if (state.records.isEmpty) {
           return Padding(
             padding: const EdgeInsets.symmetric(vertical: 12.0),
-            child: Text('No fuel records yet', style: Theme.of(context).textTheme.bodyMedium),
+            child: Text(
+              'No fuel records yet',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
           );
         }
         return ListView.separated(
@@ -69,8 +84,14 @@ class _FuelRecordsListView extends StatelessWidget {
             return ListTile(
               dense: true,
               contentPadding: const EdgeInsets.symmetric(horizontal: 0.0),
-              title: Text('${DateFormat('yyyy-MM-dd HH:mm').format(r.date)}  •  ${r.volume.toStringAsFixed(2)} L'),
-              subtitle: Text('Odo ${r.odometer.toStringAsFixed(0)}  •  ${r.pricePerL != null ? 'Rs ${r.pricePerL!.toStringAsFixed(2)}/L' : ''}${r.totalCost != null ? '  Total Rs ${r.totalCost!.toStringAsFixed(2)}' : ''}'),
+              title: Text(
+                '${DateFormat('yyyy-MM-dd HH:mm').format(r.date)}  •  ${r.volume.toStringAsFixed(2)} L',
+              ),
+              subtitle: Text(
+                'Odo ${r.odometer.toStringAsFixed(0)}'
+                '${r.pricePerL != null ? '  •  Rs ${r.pricePerL!.toStringAsFixed(2)}/L' : ''}'
+                '${r.totalCost != null ? '  •  Total Rs ${r.totalCost!.toStringAsFixed(2)}' : ''}',
+              ),
               trailing: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -84,7 +105,9 @@ class _FuelRecordsListView extends StatelessWidget {
                             initial: r,
                             onSave: (updated) async {
                               await context.read<FuelRecordsCubit>().update(updated);
-                              if (Navigator.of(context).canPop()) Navigator.of(context).pop();
+                              if (Navigator.of(context).canPop()) {
+                                Navigator.of(context).pop();
+                              }
                             },
                           ),
                         ),
@@ -100,8 +123,14 @@ class _FuelRecordsListView extends StatelessWidget {
                           title: const Text('Delete fuel record'),
                           content: const Text('This cannot be undone'),
                           actions: [
-                            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-                            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete')),
+                            TextButton(
+                              onPressed: () => Navigator.pop(ctx, false),
+                              child: const Text('Cancel'),
+                            ),
+                            FilledButton(
+                              onPressed: () => Navigator.pop(ctx, true),
+                              child: const Text('Delete'),
+                            ),
                           ],
                         ),
                       );
@@ -120,13 +149,14 @@ class _FuelRecordsListView extends StatelessWidget {
   }
 }
 
-/// A small action row with Import CSV and Add buttons.
-class FuelRecordsActionsRow extends StatelessWidget {
-  final int vehicleId;
-  const FuelRecordsActionsRow({super.key, required this.vehicleId});
+/// Action row with Import CSV and Add buttons.
+class _FuelRecordsActionsRow extends StatelessWidget {
+  const _FuelRecordsActionsRow();
 
   @override
   Widget build(BuildContext context) {
+    final cubit = context.read<FuelRecordsCubit>();
+
     return Row(
       children: [
         FilledButton.icon(
@@ -139,11 +169,11 @@ class FuelRecordsActionsRow extends StatelessWidget {
             final path = picked.files.first.path;
             if (path == null) return;
 
-            final cubit = context.read<FuelRecordsCubit>();
-            // If the cubit is not available here, move this widget above inside the provider.
             final imported = await cubit.importCsv(path);
             if (context.mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Imported $imported record(s)')));
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Imported $imported record(s)')),
+              );
             }
           },
           icon: const Icon(Icons.upload_file),
@@ -155,10 +185,12 @@ class FuelRecordsActionsRow extends StatelessWidget {
             await Navigator.of(context).push(
               MaterialPageRoute(
                 builder: (_) => FuelRecordEditScreen(
-                  vehicleId: context.read<FuelRecordsCubit>().vehicleId,
+                  vehicleId: cubit.vehicleId,
                   onSave: (rec) async {
-                    await context.read<FuelRecordsCubit>().add(rec);
-                    if (Navigator.of(context).canPop()) Navigator.of(context).pop();
+                    await cubit.add(rec);
+                    if (Navigator.of(context).canPop()) {
+                      Navigator.of(context).pop();
+                    }
                   },
                 ),
               ),
