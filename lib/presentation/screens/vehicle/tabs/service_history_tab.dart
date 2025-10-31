@@ -363,16 +363,20 @@ class _ServiceHistoryTabState extends State<ServiceHistoryTab> {
                                                     ).colorScheme.onSurface,
                                               ),
                                             ),
-                                          ,
+                                          
 // --- Fuel Records section ---
 const SizedBox(height: 16),
-Divider(height: 0),
+const Divider(height: 0),
 Padding(
   padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-  child: Text('Fuel Records', style: Theme.of(context).textTheme.titleMedium),
+  child: Text(
+    'Fuel Records',
+    style: Theme.of(context).textTheme.titleMedium,
+  ),
 ),
-FuelRecordsListSection(vehicleId: vehicle.id!),
+FuelRecordsListSection(vehicleId: widget.vehicle.id!),
 // --- end Fuel Records section ---
+
 ],
                                         ),
                                       ),
