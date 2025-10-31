@@ -12,6 +12,7 @@ import 'package:carvita/presentation/manager/maintenance_plan/maintenance_plan_c
 import 'package:carvita/presentation/manager/service_log/service_log_cubit.dart';
 import 'package:carvita/presentation/manager/service_log/service_log_state.dart';
 import 'package:carvita/presentation/manager/upcoming_maintenance/upcoming_maintenance_cubit.dart';
+import 'package:carvita/presentation/screens/fuel/fuel_records_list_section.dart';
 
 class ServiceHistoryTab extends StatefulWidget {
   final int vehicleId;
@@ -363,7 +364,17 @@ class _ServiceHistoryTabState extends State<ServiceHistoryTab> {
                                                     ).colorScheme.onSurface,
                                               ),
                                             ),
-                                          ],
+                                          ,
+// --- Fuel Records section ---
+const SizedBox(height: 16),
+Divider(height: 0),
+Padding(
+  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+  child: Text('Fuel Records', style: Theme.of(context).textTheme.titleMedium),
+),
+FuelRecordsListSection(vehicleId: vehicle.id!),
+// --- end Fuel Records section ---
+],
                                         ),
                                       ),
                                     ],
