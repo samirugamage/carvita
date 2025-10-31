@@ -4,9 +4,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'package:carvita/data/models/fuel_record.dart';
 import 'package:carvita/data/repositories/fuel_repository.dart';
-import 'package:carvita/data/repositories/vehicle_repository.dart';
 import 'package:carvita/data/sources/local/database_helper.dart';
-
 import 'package:carvita/presentation/manager/fuel_records/fuel_records_cubit.dart';
 
 class FuelRecordEditScreen extends StatefulWidget {
@@ -36,7 +34,6 @@ class _FuelRecordEditScreenState extends State<FuelRecordEditScreen> {
   final _notesCtrl = TextEditingController();
   bool _fullTank = false;
 
-  final _vehRepo = VehicleRepository();
   final _fuelRepo = FuelRepository(dbHelper: DatabaseHelper());
 
   @override
@@ -49,9 +46,8 @@ class _FuelRecordEditScreenState extends State<FuelRecordEditScreen> {
     _totalCtrl.text = i?.totalCost?.toStringAsFixed(2) ?? '';
     _volCtrl.text = i?.volume.toStringAsFixed(2) ?? '';
     _notesCtrl.text = i?.notes ?? '';
-    _fullTank = (i?.isFullTank ?? 0) == 1;
+    _fullTank = i?.isFullTank ?? false;
 
-    // Hook up listeners for auto calculations
     _priceCtrl.addListener(_recalcVolumeForward);
     _totalCtrl.addListener(_recalcVolumeForward);
     _volCtrl.addListener(_recalcCostsBackward);
@@ -91,17 +87,18 @@ class _FuelRecordEditScreenState extends State<FuelRecordEditScreen> {
   }
 
   void _setText(TextEditingController c, String s) {
-    final old = c.text;
-    if (old == s) return;
+    if (c.text == s) return;
     final sel = c.selection;
-    c.removeListener(_recalcVolumeForward);
-    c.removeListener(_recalcCostsBackward);
+    _priceCtrl.removeListener(_recalcVolumeForward);
+    _totalCtrl.removeListener(_recalcVolumeForward);
+    _volCtrl.removeListener(_recalcCostsBackward);
     c.text = s;
     if (sel.baseOffset >= 0 && sel.baseOffset <= s.length) {
       c.selection = sel;
     }
-    c.addListener(_recalcVolumeForward);
-    c.addListener(_recalcCostsBackward);
+    _priceCtrl.addListener(_recalcVolumeForward);
+    _totalCtrl.addListener(_recalcVolumeForward);
+    _volCtrl.addListener(_recalcCostsBackward);
   }
 
   Future<void> _pickDate() async {
@@ -114,6 +111,30 @@ class _FuelRecordEditScreenState extends State<FuelRecordEditScreen> {
     if (d != null) {
       final t = TimeOfDay.fromDateTime(_date);
       setState(() => _date = DateTime(d.year, d.month, d.day, t.hour, t.minute));
+    }
+  }
+
+  Future<void> _updateVehicleMileageIfHigher(int vehicleId, double newMileage) async {
+    final db = await DatabaseHelper().database;
+    final rows = await db.query(
+      'vehicles',
+      columns: ['mileage'],
+      where: 'id = ?',
+      whereArgs: [vehicleId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return;
+    final current = (rows.first['mileage'] as num?)?.toDouble() ?? 0.0;
+    if (newMileage > current) {
+      await db.update(
+        'vehicles',
+        {
+          'mileage': newMileage,
+          'mileage_last_updated': DateTime.now().toIso8601String(),
+        },
+        where: 'id = ?',
+        whereArgs: [vehicleId],
+      );
     }
   }
 
@@ -133,7 +154,7 @@ class _FuelRecordEditScreenState extends State<FuelRecordEditScreen> {
       volume: vol,
       pricePerL: price,
       totalCost: total,
-      isFullTank: _fullTank ? 1 : 0,
+      isFullTank: _fullTank,
       notes: _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
     );
 
@@ -143,16 +164,19 @@ class _FuelRecordEditScreenState extends State<FuelRecordEditScreen> {
       await _fuelRepo.updateFuelRecord(rec);
     }
 
-    // Update vehicle mileage if higher
-    await _vehRepo.updateMileageIfHigher(widget.vehicleId, odometer);
+    await _updateVehicleMileageIfHigher(widget.vehicleId, odometer);
+
+    final cubit = BlocProvider.maybeOf<FuelRecordsCubit>(context);
+    if (cubit != null) {
+      await cubit.load();
+    }
 
     if (widget.onSave != null) {
       await widget.onSave!(rec);
-    } else {
-      // fall back: notify cubit if present
-      final cubit = context.maybeRead<FuelRecordsCubit>();
-      if (cubit != null) await cubit.load();
-      if (mounted && Navigator.of(context).canPop()) Navigator.of(context).pop();
+    }
+
+    if (mounted && Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
     }
   }
 

@@ -4,24 +4,28 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:collection/collection.dart';
 import 'package:intl/intl.dart';
 
-import 'package:collection/collection.dart';
 import 'package:carvita/data/models/fuel_record.dart';
+import 'package:carvita/data/models/service_log_entry.dart';
+import 'package:carvita/data/models/service_log_performed_item_link.dart';
 import 'package:carvita/data/repositories/fuel_repository.dart';
+import 'package:carvita/data/repositories/maintenance_repository.dart';
 import 'package:carvita/data/sources/local/database_helper.dart';
 import 'package:carvita/presentation/manager/vehicle_list/vehicle_cubit.dart';
 import 'package:carvita/presentation/manager/vehicle_list/vehicle_state.dart';
 
-class VehicleFuelImportTile extends StatefulWidget {
-  const VehicleFuelImportTile({super.key});
+class VehicleDataImportTile extends StatefulWidget {
+  const VehicleDataImportTile({super.key});
 
   @override
-  State<VehicleFuelImportTile> createState() => _VehicleFuelImportTileState();
+  State<VehicleDataImportTile> createState() => _VehicleDataImportTileState();
 }
 
-class _VehicleFuelImportTileState extends State<VehicleFuelImportTile> {
+class _VehicleDataImportTileState extends State<VehicleDataImportTile> {
   final _fuelRepo = FuelRepository(dbHelper: DatabaseHelper());
+  final _maintRepo = MaintenanceRepository(dbHelper: DatabaseHelper());
 
   int? _vehicleId;
   String _vehicleName = 'Not set';
@@ -29,23 +33,30 @@ class _VehicleFuelImportTileState extends State<VehicleFuelImportTile> {
 
   Future<void> _chooseVehicle(BuildContext context) async {
     final state = context.read<VehicleCubit>().state;
-    if (state is! VehicleLoaded || state.vehicles.isEmpty) {
+    List<VehicleListItem> items = [];
+    if (state is VehicleLoaded) {
+      items = state.vehicles
+          .map((v) => VehicleListItem(id: v.id!, name: v.name))
+          .toList();
+    }
+    if (items.isEmpty) {
+      // trigger fetch and show a note
       context.read<VehicleCubit>().fetchVehicles();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Loading vehicles... try again')),
+        const SnackBar(content: Text('Loading vehicles... try again shortly')),
       );
       return;
     }
-    final picked = await showDialog<_VItem?>(
+    final picked = await showDialog<VehicleListItem?>(
       context: context,
       builder: (ctx) => SimpleDialog(
         title: const Text('Choose vehicle'),
         children: [
-          ...state.vehicles.map(
-            (v) => SimpleDialogOption(
-              onPressed: () => Navigator.pop(ctx, _VItem(v.id!, v.name)),
-              child: Text(v.name),
+          ...items.map(
+            (it) => SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, it),
+              child: Text(it.name),
             ),
           ),
         ],
@@ -66,6 +77,7 @@ class _VehicleFuelImportTileState extends State<VehicleFuelImportTile> {
       );
       return;
     }
+
     final picked = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['csv'],
@@ -79,12 +91,13 @@ class _VehicleFuelImportTileState extends State<VehicleFuelImportTile> {
     try {
       final text = await File(path).readAsString();
       final sections = _splitIntoSections(text);
-
-      int imported = 0;
       double maxOdo = 0;
+      final vehicleId = _vehicleId!;
 
+      // Fuel
       if (sections.containsKey('Refuelling')) {
         final rows = _parseCsvTable(sections['Refuelling']!);
+        int importedFuel = 0;
         for (final row in rows) {
           final dateStr = (row['Date'] ?? '').toString().trim();
           final date = DateTime.tryParse(dateStr) ?? _lenientParseDate(dateStr);
@@ -99,7 +112,7 @@ class _VehicleFuelImportTileState extends State<VehicleFuelImportTile> {
 
           final rec = FuelRecord(
             id: null,
-            vehicleId: _vehicleId!,
+            vehicleId: vehicleId,
             date: date,
             odometer: odo,
             volume: volume,
@@ -110,17 +123,119 @@ class _VehicleFuelImportTileState extends State<VehicleFuelImportTile> {
           );
           await _fuelRepo.addFuelRecord(rec);
           if (odo > maxOdo) maxOdo = odo;
-          imported++;
+          importedFuel++;
+        }
+        if (importedFuel > 0 && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Imported $importedFuel fuel record(s) for $_vehicleName')),
+          );
+        }
+      }
+
+      // Service
+      if (sections.containsKey('Service')) {
+        final rows = _parseCsvTable(sections['Service']!);
+        // group rows by same date + odometer into one ServiceLog with multiple items
+        final grouped = groupBy<Map<String, dynamic>, String>(rows, (r) {
+          final d = (r['Date'] ?? '').toString().trim();
+          final o = (r['Odometer (km)'] ?? '').toString().trim();
+          return '$d|$o';
+        });
+        int importedService = 0;
+        for (final key in grouped.keys) {
+          final group = grouped[key]!;
+          final any = group.first;
+          final dateStr = (any['Date'] ?? '').toString().trim();
+          final date = DateTime.tryParse(dateStr) ?? _lenientParseDate(dateStr);
+          final odo = _d(any['Odometer (km)']);
+          if (date == null || odo == null) continue;
+
+          // items + total cost
+          final items = <PerformedItemInput>[];
+          double total = 0;
+          for (final r in group) {
+            final name = _s(r['Type of service']) ?? _s(r['Local service']) ?? 'Service';
+            final cost = _d(r['Total cost']);
+            if (name != null && name.trim().isNotEmpty) {
+              items.add(PerformedItemInput(customItemName: name.trim()));
+            }
+            if (cost != null) total += cost;
+          }
+
+          final entry = ServiceLogEntry(
+            id: null,
+            vehicleId: vehicleId,
+            serviceDate: date,
+            mileageAtService: odo,
+            cost: total == 0 ? null : total,
+            notes: null,
+          );
+
+          await _maintRepo.addServiceLog(entry, items);
+          if (odo > maxOdo) maxOdo = odo;
+          importedService++;
+        }
+        if (importedService > 0 && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Imported $importedService maintenance log(s) for $_vehicleName')),
+          );
+        }
+      }
+
+      // optionally import ##Expense as service logs too
+      if (sections.containsKey('Expense')) {
+        final rows = _parseCsvTable(sections['Expense']!);
+        final grouped = groupBy<Map<String, dynamic>, String>(rows, (r) {
+          final d = (r['Date'] ?? '').toString().trim();
+          final o = (r['Odometer (km)'] ?? '').toString().trim();
+          return '$d|$o';
+        });
+        int importedExp = 0;
+        for (final key in grouped.keys) {
+          final group = grouped[key]!;
+          final any = group.first;
+          final dateStr = (any['Date'] ?? '').toString().trim();
+          final date = DateTime.tryParse(dateStr) ?? _lenientParseDate(dateStr);
+          final odo = _d(any['Odometer (km)']);
+          if (date == null || odo == null) continue;
+
+          final items = <PerformedItemInput>[];
+          double total = 0;
+          for (final r in group) {
+            final t = _s(r['Type of expense']) ?? _s(r['Local expense']) ?? 'Expense';
+            final c = _d(r['Total cost']);
+            if (t != null && t.trim().isNotEmpty) {
+              items.add(PerformedItemInput(customItemName: 'Expense: ${t.trim()}'));
+            }
+            if (c != null) total += c;
+          }
+
+          final entry = ServiceLogEntry(
+            id: null,
+            vehicleId: vehicleId,
+            serviceDate: date,
+            mileageAtService: odo,
+            cost: total == 0 ? null : total,
+            notes: null,
+          );
+          await _maintRepo.addServiceLog(entry, items);
+          if (odo > maxOdo) maxOdo = odo;
+          importedExp++;
+        }
+        if (importedExp > 0 && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Imported $importedExp expense log(s) as maintenance for $_vehicleName')),
+          );
         }
       }
 
       if (maxOdo > 0) {
-        await _updateVehicleMileageIfHigher(_vehicleId!, maxOdo);
+        await _updateVehicleMileageIfHigher(vehicleId, maxOdo);
       }
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Imported $imported fuel record(s) for $_vehicleName')),
+        const SnackBar(content: Text('Import finished')),
       );
     } catch (e) {
       if (mounted) {
@@ -136,9 +251,9 @@ class _VehicleFuelImportTileState extends State<VehicleFuelImportTile> {
   @override
   Widget build(BuildContext context) {
     return ListTile(
-      leading: Icon(Icons.local_gas_station_outlined,
+      leading: Icon(Icons.system_update_alt_outlined,
           color: Theme.of(context).colorScheme.primary),
-      title: const Text('Import fuel records (CSV)'),
+      title: const Text('Import vehicle data (Fuel + Maintenance)'),
       subtitle: Text(_vehicleId == null ? 'Vehicle: $_vehicleName' : 'Vehicle: $_vehicleName (#$_vehicleId)'),
       trailing: _busy
           ? SizedBox(
@@ -166,7 +281,7 @@ class _VehicleFuelImportTileState extends State<VehicleFuelImportTile> {
     );
   }
 
-  // small helpers and CSV parsing
+  // helpers
 
   Future<void> _updateVehicleMileageIfHigher(int vehicleId, double newMileage) async {
     final db = await DatabaseHelper().database;
@@ -216,7 +331,7 @@ class _VehicleFuelImportTileState extends State<VehicleFuelImportTile> {
     final data = <Map<String, dynamic>>[];
     for (int i = 1; i < rows.length; i++) {
       final parts = _splitCsvRow(rows[i]);
-      final map = <Map<String, dynamic>>{};
+      final map = <String, dynamic>{};
       for (int c = 0; c < parts.length && c < header.length; c++) {
         map[header[c]] = parts[c];
       }
@@ -286,7 +401,8 @@ class _VehicleFuelImportTileState extends State<VehicleFuelImportTile> {
   }
 }
 
-class _VItem {
-  final int id; final String name;
-  _VItem(this.id, this.name);
+class VehicleListItem {
+  final int id;
+  final String name;
+  VehicleListItem({required this.id, required this.name});
 }
