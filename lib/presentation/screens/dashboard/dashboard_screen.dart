@@ -144,7 +144,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => FuelRecordEditScreen(
-          vehicleId: vehicleId!,
+          vehicleId: vehicleId,
           onSave: (_) async {
             // After save, refresh dashboard data
             final l10n = AppLocalizations.of(context);

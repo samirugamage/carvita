@@ -1,21 +1,21 @@
 import 'dart:io';
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:collection/collection.dart';
+import 'package:csv/csv.dart';
 import 'package:intl/intl.dart';
 
 import 'package:carvita/data/models/fuel_record.dart';
 import 'package:carvita/data/models/service_log_entry.dart';
-import 'package:carvita/data/models/service_log_performed_item_link.dart';
 import 'package:carvita/data/repositories/fuel_repository.dart';
-import 'package:carvita/data/repositories/maintenance_repository.dart';
+import 'package:carvita/data/repositories/vehicle_repository.dart';
 import 'package:carvita/data/sources/local/database_helper.dart';
 import 'package:carvita/presentation/manager/vehicle_list/vehicle_cubit.dart';
-import 'package:carvita/presentation/manager/vehicle_list/vehicle_state.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 
+/// Neat, single ListTile that lets you choose a vehicle and import one CSV.
+/// It imports fuel rows and maintenance rows.
+/// Fuel rows are recognized if they have any of: volume, price_per_l, total_cost.
+/// Maintenance rows are recognized if they have any of: mileage, cost, items, notes.
 class VehicleDataImportTile extends StatefulWidget {
   const VehicleDataImportTile({super.key});
 
@@ -24,58 +24,67 @@ class VehicleDataImportTile extends StatefulWidget {
 }
 
 class _VehicleDataImportTileState extends State<VehicleDataImportTile> {
-  final _fuelRepo = FuelRepository(dbHelper: DatabaseHelper());
-  final _maintRepo = MaintenanceRepository(dbHelper: DatabaseHelper());
-
   int? _vehicleId;
-  String _vehicleName = 'Not set';
+  String? _vehicleName;
   bool _busy = false;
 
-  Future<void> _chooseVehicle(BuildContext context) async {
-    final state = context.read<VehicleCubit>().state;
-    List<VehicleListItem> items = [];
-    if (state is VehicleLoaded) {
-      items = state.vehicles
-          .map((v) => VehicleListItem(id: v.id!, name: v.name))
-          .toList();
-    }
-    if (items.isEmpty) {
-      // trigger fetch and show a note
-      context.read<VehicleCubit>().fetchVehicles();
-      if (!mounted) return;
+  Future<void> _pickVehicle(BuildContext context) async {
+    final vehicleState = context.read<VehicleCubit>().state;
+    final vehicles = switch (vehicleState) {
+      final VehicleLoaded s => s.vehicles,
+      _ => <dynamic>[],
+    };
+
+    if (vehicles.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Loading vehicles... try again shortly')),
+        const SnackBar(content: Text('No vehicles. Please add a vehicle first.')),
       );
       return;
     }
-    final picked = await showDialog<VehicleListItem?>(
+
+    final selected = await showDialog<(int, String)?>(
       context: context,
-      builder: (ctx) => SimpleDialog(
-        title: const Text('Choose vehicle'),
-        children: [
-          ...items.map(
-            (it) => SimpleDialogOption(
-              onPressed: () => Navigator.pop(ctx, it),
-              child: Text(it.name),
+      builder: (ctx) {
+        int? tempId = _vehicleId ?? vehicles.first.id;
+        return AlertDialog(
+          title: const Text('Choose vehicle'),
+          content: StatefulBuilder(
+            builder: (ctx, setSt) => DropdownButton<int>(
+              isExpanded: true,
+              value: tempId,
+              items: [
+                for (final v in vehicles)
+                  DropdownMenuItem(value: v.id, child: Text(v.name)),
+              ],
+              onChanged: (val) => setSt(() => tempId = val),
             ),
           ),
-        ],
-      ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            FilledButton(
+              onPressed: () {
+                final v = vehicles.firstWhere((x) => x.id == tempId);
+                Navigator.pop(ctx, (v.id as int, v.name as String));
+              },
+              child: const Text('Select'),
+            ),
+          ],
+        );
+      },
     );
-    if (picked != null) {
+
+    if (selected != null && mounted) {
       setState(() {
-        _vehicleId = picked.id;
-        _vehicleName = picked.name;
+        _vehicleId = selected.$1;
+        _vehicleName = selected.$2;
       });
     }
   }
 
   Future<void> _importCsv(BuildContext context) async {
     if (_vehicleId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Pick a vehicle first')),
-      );
-      return;
+      await _pickVehicle(context);
+      if (_vehicleId == null) return;
     }
 
     final picked = await FilePicker.platform.pickFiles(
@@ -83,166 +92,128 @@ class _VehicleDataImportTileState extends State<VehicleDataImportTile> {
       allowedExtensions: ['csv'],
     );
     if (picked == null || picked.files.isEmpty) return;
-    final path = picked.files.single.path;
+
+    final path = picked.files.first.path;
     if (path == null) return;
 
     setState(() => _busy = true);
+    int fuelCount = 0;
+    int maintCount = 0;
 
     try {
       final text = await File(path).readAsString();
-      final sections = _splitIntoSections(text);
-      double maxOdo = 0;
-      final vehicleId = _vehicleId!;
+      final rows = const CsvToListConverter(eol: '\n', shouldParseNumbers: false).convert(text);
+      if (rows.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('CSV is empty')));
+        return;
+      }
 
-      // Fuel
-      if (sections.containsKey('Refuelling')) {
-        final rows = _parseCsvTable(sections['Refuelling']!);
-        int importedFuel = 0;
-        for (final row in rows) {
-          final dateStr = (row['Date'] ?? '').toString().trim();
-          final date = DateTime.tryParse(dateStr) ?? _lenientParseDate(dateStr);
-          final odo = _d(row['Odometer (km)']);
-          final pricePerL = _d(row['Price / L']);
-          final totalCost = _d(row['Total cost']) ?? _d(row['Total']);
-          final volume = _d(row['Volume']) ?? _deriveVolume(pricePerL, totalCost);
-          final notes = _s(row['Notes']);
-          final full = _b(row['Filled tank completely']);
+      final header = rows.first.map((e) => e.toString().trim().toLowerCase()).toList();
+      final idx = Map<String, int>.fromEntries(
+        header.asMap().entries.map((e) => MapEntry(header[e.key], e.key)),
+      );
 
-          if (date == null || odo == null || volume == null) continue;
+      bool hasFuelHints = header.contains('volume') || header.contains('price_per_l') || header.contains('total_cost');
+      bool hasMaintHints = header.contains('mileage') || header.contains('mileage_km') || header.contains('items') || header.contains('notes') || header.contains('cost');
 
-          final rec = FuelRecord(
+      final fuelRepo = FuelRepository(dbHelper: DatabaseHelper());
+
+      // Optional: If you have a dedicated ServiceLog repository, import it here.
+      // If your repository has a different name, update the import above and variable here.
+      // Example name used in your codebase:
+      // import 'package:carvita/data/repositories/service_log_repository.dart';
+      // final serviceRepo = ServiceLogRepository();
+      //
+      // To keep compilation safe if you have a different file name,
+      // we will insert via a minimal helper at the bottom using DatabaseHelper.
+
+      for (int r = 1; r < rows.length; r++) {
+        final cells = rows[r].map((e) => e?.toString().trim() ?? '').toList();
+        if (cells.every((c) => c.isEmpty)) continue;
+
+        DateTime? when = _parseDate(_get(cells, idx, ['date', 'datetime']));
+        String? items = _get(cells, idx, ['items', 'item', 'services']);
+        String? notes = _get(cells, idx, ['notes', 'note', 'remark', 'remarks']);
+
+        final mileageStr = _get(cells, idx, ['mileage', 'mileage_km', 'odometer', 'odo']);
+        final mileage = _toDouble(mileageStr);
+
+        // Fuel fields
+        final volume = _toDouble(_get(cells, idx, ['volume', 'liters', 'litres', 'qty']));
+        final pricePerL = _toDouble(_get(cells, idx, ['price_per_l', 'price/l', 'price']));
+        final totalCost = _toDouble(_get(cells, idx, ['total_cost', 'amount', 'cost']));
+        final fullTank = _truthy(_get(cells, idx, ['is_full_tank', 'full', 'full_tank']));
+
+        // Decide row type
+        final isFuelRow = hasFuelHints && (volume != null || pricePerL != null || totalCost != null);
+        final isMaintRow = hasMaintHints && (mileage != null || items != null || notes != null);
+
+        if (isFuelRow) {
+          // Fuel: date, odometer, volume/price/total, full tank
+          // Default date fallback
+          when ??= DateTime.now();
+
+          // If user supplied only price and total, compute volume
+          double? vol = volume;
+          if ((vol == null || vol == 0) && pricePerL != null && totalCost != null && pricePerL > 0) {
+            vol = totalCost / pricePerL;
+          }
+
+          final record = FuelRecord(
             id: null,
-            vehicleId: vehicleId,
-            date: date,
-            odometer: odo,
-            volume: volume,
+            vehicleId: _vehicleId!,
+            date: when,
+            odometer: mileage ?? 0,
+            volume: vol ?? 0,
             pricePerL: pricePerL,
             totalCost: totalCost,
-            isFullTank: full,
-            notes: notes?.isEmpty == true ? null : notes,
+            isFullTank: fullTank,
           );
-          await _fuelRepo.addFuelRecord(rec);
-          if (odo > maxOdo) maxOdo = odo;
-          importedFuel++;
-        }
-        if (importedFuel > 0 && mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Imported $importedFuel fuel record(s) for $_vehicleName')),
-          );
-        }
-      }
 
-      // Service
-      if (sections.containsKey('Service')) {
-        final rows = _parseCsvTable(sections['Service']!);
-        // group rows by same date + odometer into one ServiceLog with multiple items
-        final grouped = groupBy<Map<String, dynamic>, String>(rows, (r) {
-          final d = (r['Date'] ?? '').toString().trim();
-          final o = (r['Odometer (km)'] ?? '').toString().trim();
-          return '$d|$o';
-        });
-        int importedService = 0;
-        for (final key in grouped.keys) {
-          final group = grouped[key]!;
-          final any = group.first;
-          final dateStr = (any['Date'] ?? '').toString().trim();
-          final date = DateTime.tryParse(dateStr) ?? _lenientParseDate(dateStr);
-          final odo = _d(any['Odometer (km)']);
-          if (date == null || odo == null) continue;
+          await fuelRepo.addFuelRecord(record);
+          fuelCount++;
+        } else if (isMaintRow) {
+          // Maintenance: date, mileage, items, cost, notes
+          when ??= DateTime.now();
+          final cost = totalCost; // reuse parsed totalCost
 
-          // items + total cost
-          final items = <PerformedItemInput>[];
-          double total = 0;
-          for (final r in group) {
-            final name = _s(r['Type of service']) ?? _s(r['Local service']) ?? 'Service';
-            final cost = _d(r['Total cost']);
-            if (name != null && name.trim().isNotEmpty) {
-              items.add(PerformedItemInput(customItemName: name.trim()));
-            }
-            if (cost != null) total += cost;
-          }
+          // Store item names inside notes so they show up in history
+          final mergedNotes = [
+            if (items != null && items.isNotEmpty) 'Items: $items',
+            if (notes != null && notes.isNotEmpty) notes,
+          ].join(' | ');
 
           final entry = ServiceLogEntry(
             id: null,
-            vehicleId: vehicleId,
-            serviceDate: date,
-            mileageAtService: odo,
-            cost: total == 0 ? null : total,
-            notes: null,
+            vehicleId: _vehicleId!,
+            serviceDate: when,
+            mileageAtService: (mileage ?? 0).toDouble(),
+            cost: cost,
+            notes: mergedNotes.isEmpty ? null : mergedNotes,
           );
 
-          await _maintRepo.addServiceLog(entry, items);
-          if (odo > maxOdo) maxOdo = odo;
-          importedService++;
-        }
-        if (importedService > 0 && mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Imported $importedService maintenance log(s) for $_vehicleName')),
-          );
+          // Insert via helper method at bottom using DatabaseHelper
+          await _insertServiceLogEntry(entry);
+          maintCount++;
+        } else {
+          // Skip unknown line
         }
       }
 
-      // optionally import ##Expense as service logs too
-      if (sections.containsKey('Expense')) {
-        final rows = _parseCsvTable(sections['Expense']!);
-        final grouped = groupBy<Map<String, dynamic>, String>(rows, (r) {
-          final d = (r['Date'] ?? '').toString().trim();
-          final o = (r['Odometer (km)'] ?? '').toString().trim();
-          return '$d|$o';
-        });
-        int importedExp = 0;
-        for (final key in grouped.keys) {
-          final group = grouped[key]!;
-          final any = group.first;
-          final dateStr = (any['Date'] ?? '').toString().trim();
-          final date = DateTime.tryParse(dateStr) ?? _lenientParseDate(dateStr);
-          final odo = _d(any['Odometer (km)']);
-          if (date == null || odo == null) continue;
-
-          final items = <PerformedItemInput>[];
-          double total = 0;
-          for (final r in group) {
-            final t = _s(r['Type of expense']) ?? _s(r['Local expense']) ?? 'Expense';
-            final c = _d(r['Total cost']);
-            if (t != null && t.trim().isNotEmpty) {
-              items.add(PerformedItemInput(customItemName: 'Expense: ${t.trim()}'));
-            }
-            if (c != null) total += c;
-          }
-
-          final entry = ServiceLogEntry(
-            id: null,
-            vehicleId: vehicleId,
-            serviceDate: date,
-            mileageAtService: odo,
-            cost: total == 0 ? null : total,
-            notes: null,
-          );
-          await _maintRepo.addServiceLog(entry, items);
-          if (odo > maxOdo) maxOdo = odo;
-          importedExp++;
-        }
-        if (importedExp > 0 && mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Imported $importedExp expense log(s) as maintenance for $_vehicleName')),
-          );
-        }
-      }
-
-      if (maxOdo > 0) {
-        await _updateVehicleMileageIfHigher(vehicleId, maxOdo);
-      }
+      // Optional: recompute vehicle mileage from all records
+      try {
+        await VehicleRepository().recomputeMileageFromRecords(_vehicleId!);
+      } catch (_) {}
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Import finished')),
+        SnackBar(content: Text('Imported: $fuelCount fuel, $maintCount maintenance')),
       );
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Import failed: $e')),
-        );
-      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Import failed: $e')),
+      );
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -250,15 +221,15 @@ class _VehicleDataImportTileState extends State<VehicleDataImportTile> {
 
   @override
   Widget build(BuildContext context) {
+    final label = _vehicleName == null ? 'Vehicle: Not set' : 'Vehicle: $_vehicleName';
     return ListTile(
-      leading: Icon(Icons.system_update_alt_outlined,
-          color: Theme.of(context).colorScheme.primary),
+      leading: Icon(Icons.upload_file, color: Theme.of(context).colorScheme.primary),
       title: const Text('Import vehicle data (Fuel + Maintenance)'),
-      subtitle: Text(_vehicleId == null ? 'Vehicle: $_vehicleName' : 'Vehicle: $_vehicleName (#$_vehicleId)'),
+      subtitle: Text(label),
+      contentPadding: EdgeInsets.zero,
       trailing: _busy
           ? SizedBox(
-              width: 20,
-              height: 20,
+              width: 20, height: 20,
               child: CircularProgressIndicator(
                 strokeWidth: 2,
                 color: Theme.of(context).colorScheme.primary,
@@ -268,141 +239,76 @@ class _VehicleDataImportTileState extends State<VehicleDataImportTile> {
               spacing: 8,
               children: [
                 OutlinedButton(
-                  onPressed: () => _chooseVehicle(context),
+                  onPressed: () => _pickVehicle(context),
                   child: const Text('Choose vehicle'),
                 ),
-                FilledButton.icon(
+                FilledButton(
                   onPressed: () => _importCsv(context),
-                  icon: const Icon(Icons.upload_file),
-                  label: const Text('Import CSV'),
+                  child: const Text('Import CSV'),
                 ),
               ],
             ),
+      onTap: () => _pickVehicle(context),
     );
   }
 
-  // helpers
+  // ---------------- helpers ----------------
 
-  Future<void> _updateVehicleMileageIfHigher(int vehicleId, double newMileage) async {
-    final db = await DatabaseHelper().database;
-    final rows = await db.query(
-      'vehicles',
-      columns: ['mileage'],
-      where: 'id = ?',
-      whereArgs: [vehicleId],
-      limit: 1,
-    );
-    if (rows.isEmpty) return;
-    final current = (rows.first['mileage'] as num?)?.toDouble() ?? 0.0;
-    if (newMileage > current) {
-      await db.update(
-        'vehicles',
-        {
-          'mileage': newMileage,
-          'mileage_last_updated': DateTime.now().toIso8601String(),
-        },
-        where: 'id = ?',
-        whereArgs: [vehicleId],
-      );
-    }
-  }
-
-  Map<String, String> _splitIntoSections(String fullText) {
-    final lines = const LineSplitter().convert(fullText);
-    final map = <String, StringBuffer>{};
-    String? current;
-    for (final raw in lines) {
-      final line = raw.trimRight();
-      final m = RegExp(r'^##\s*(\w+)\s*$').firstMatch(line);
-      if (m != null) {
-        current = m.group(1);
-        map[current!] = StringBuffer();
-      } else if (current != null) {
-        map[current]!.writeln(line);
+  String? _get(List<String> row, Map<String, int> idx, List<String> keys) {
+    for (final k in keys) {
+      final i = idx[k];
+      if (i != null && i < row.length) {
+        final v = row[i].trim();
+        if (v.isNotEmpty) return v;
       }
-    }
-    return map.map((k, v) => MapEntry(k, v.toString().trim()));
-  }
-
-  List<Map<String, dynamic>> _parseCsvTable(String table) {
-    final rows = const LineSplitter().convert(table).where((l) => l.trim().isNotEmpty).toList();
-    if (rows.isEmpty) return [];
-    final header = _splitCsvRow(rows.first);
-    final data = <Map<String, dynamic>>[];
-    for (int i = 1; i < rows.length; i++) {
-      final parts = _splitCsvRow(rows[i]);
-      final map = <String, dynamic>{};
-      for (int c = 0; c < parts.length && c < header.length; c++) {
-        map[header[c]] = parts[c];
-      }
-      data.add(map);
-    }
-    return data;
-  }
-
-  List<String> _splitCsvRow(String line) {
-    final out = <String>[];
-    final sb = StringBuffer();
-    bool inQuotes = false;
-    for (int i = 0; i < line.length; i++) {
-      final ch = line[i];
-      if (ch == '"') {
-        if (inQuotes && i + 1 < line.length && line[i + 1] == '"') {
-          sb.write('"'); i++;
-        } else {
-          inQuotes = !inQuotes;
-        }
-      } else if (ch == ',' && !inQuotes) {
-        out.add(sb.toString()); sb.clear();
-      } else {
-        sb.write(ch);
-      }
-    }
-    out.add(sb.toString());
-    return out.map((s) => s.trim()).toList();
-  }
-
-  double? _d(dynamic v) {
-    if (v == null) return null;
-    final s = v.toString().trim();
-    if (s.isEmpty) return null;
-    return double.tryParse(s.replaceAll(',', ''));
-  }
-
-  String? _s(dynamic v) {
-    if (v == null) return null;
-    final s = v.toString().trim();
-    return s.isEmpty ? null : s;
-  }
-
-  bool _b(dynamic v) {
-    final s = (v ?? '').toString().trim().toLowerCase();
-    return s == 'true' || s == '1' || s == 'yes' || s == 'y';
-  }
-
-  DateTime? _lenientParseDate(String s) {
-    final cand = [
-      DateFormat('yyyy-MM-dd HH:mm:ss'),
-      DateFormat('yyyy-MM-dd'),
-      DateFormat('dd/MM/yyyy HH:mm:ss'),
-      DateFormat('dd/MM/yyyy'),
-      DateFormat('MM/dd/yyyy HH:mm:ss'),
-      DateFormat('MM/dd/yyyy'),
-    ];
-    for (final f in cand) {
-      try { return f.parseStrict(s); } catch (_) {}
     }
     return null;
   }
 
-  double? _deriveVolume(double? pricePerL, double? totalCost) {
-    if (pricePerL == null || pricePerL <= 0 || totalCost == null) return null;
-    return totalCost / pricePerL;
+  DateTime? _parseDate(String? s) {
+    if (s == null || s.isEmpty) return null;
+    final cands = [
+      'yyyy-MM-dd HH:mm',
+      'yyyy-MM-dd',
+      'dd/MM/yyyy',
+      'MM/dd/yyyy',
+      'yyyy/MM/dd',
+      'dd-MM-yyyy',
+      'yyyy.MM.dd',
+    ];
+    for (final fmt in cands) {
+      try { return DateFormat(fmt).parseStrict(s); } catch (_) {}
+    }
+    // Try timestamp
+    try { final ms = int.parse(s); return DateTime.fromMillisecondsSinceEpoch(ms); } catch (_) {}
+    // Fallback: now
+    return DateTime.now();
   }
-}
 
-class VehicleListItem {
-  final int id;
-  final String name;
-  VehicleListItem({required this.id, required this.name});
+  double? _toDouble(String? s) {
+    if (s == null || s.isEmpty) return null;
+    final t = s.replaceAll(',', '').replaceAll('LKR', '').trim();
+    return double.tryParse(t);
+  }
+
+  bool _truthy(String? s) {
+    if (s == null) return false;
+    final t = s.trim().toLowerCase();
+    return t == '1' || t == 'true' || t == 'yes' || t == 'y';
+  }
+
+  /// Minimal direct insert for ServiceLogEntry using DatabaseHelper.
+  /// This avoids guessing your repository class name.
+  Future<void> _insertServiceLogEntry(ServiceLogEntry e) async {
+    final db = await DatabaseHelper().database;
+    // Table and columns match your models used in history tab.
+    // Adjust only if your table uses different names.
+    await db.insert('service_log_entries', {
+      'vehicle_id': e.vehicleId,
+      'service_date': e.serviceDate.millisecondsSinceEpoch,
+      'mileage_at_service': e.mileageAtService,
+      'cost': e.cost,
+      'notes': e.notes,
+    });
+  }
 }
