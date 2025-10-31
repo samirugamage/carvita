@@ -54,77 +54,133 @@ class FuelRecordsCubit extends Cubit<FuelRecordsState> {
   }
 
   /// Import CSV at [filePath]. Returns count imported.
-  /// Expected headers include:
-  /// Odometer (km), Date, Price / L, Total cost, Volume, Filled tank completely, Notes
+  /// Accepts files that start with a banner line like "##Refuelling" before the real header.
+  /// Expected header contains at least: "Odometer (km)", "Date", "Volume".
+  /// Optional columns: "Price / L", "Total cost", "Filled tank completely", "Notes".
   Future<int> importCsv(String filePath) async {
     emit(state.copyWith(loading: true, error: null));
     int imported = 0;
+
     try {
-      final file = File(filePath);
-      final content = await file.readAsString();
+      final raw = await File(filePath).readAsString();
+
+      // Split into lines and find the first line that looks like the real header.
+      final lines = raw.split(RegExp(r'\r?\n')).where((l) => l.trim().isNotEmpty).toList();
+
+      int headerLineIndex = -1;
+      for (int i = 0; i < lines.length; i++) {
+        final l = lines[i].toLowerCase();
+        // Heuristic: the header line should contain these keywords
+        final looksLikeHeader =
+            l.contains('odometer') && l.contains('date') && (l.contains('volume') || l.contains('fuel'));
+        if (looksLikeHeader) {
+          headerLineIndex = i;
+          break;
+        }
+      }
+
+      if (headerLineIndex == -1) {
+        // Fallback: keep old behavior so at least we do not crash
+        headerLineIndex = 0;
+      }
+
+      // Re-parse only from the detected header to the end
+      final normalized = lines.sublist(headerLineIndex).join('\n');
 
       final rows = const CsvToListConverter(
         eol: '\n',
         shouldParseNumbers: false,
-      ).convert(content);
+      ).convert(normalized);
 
       if (rows.isEmpty) {
         emit(state.copyWith(loading: false));
         return 0;
       }
 
-      final header = rows.first.map((e) => (e?.toString() ?? '').trim()).toList();
+      // Normalize header labels
+      final header = rows.first
+          .map((e) => (e?.toString() ?? '').trim())
+          .toList();
 
       int idxOdo   = header.indexWhere((h) => h.toLowerCase().contains('odometer'));
       int idxDate  = header.indexWhere((h) => h.toLowerCase().startsWith('date'));
-      int idxPpl   = header.indexWhere(
-        (h) => h.replaceAll(' ', '').toLowerCase() == 'price/l'
-            || h.toLowerCase().startsWith('price'),
-      );
-      int idxTotal = header.indexWhere((h) => h.toLowerCase().contains('total'));
       int idxVol   = header.indexWhere((h) => h.toLowerCase().contains('volume'));
+
+      // Price per L variants
+      int idxPpl   = header.indexWhere((h) {
+        final s = h.replaceAll(' ', '').toLowerCase();
+        return s == 'price/l' || s == 'priceperl' || h.toLowerCase().startsWith('price');
+      });
+
+      int idxTotal = header.indexWhere((h) => h.toLowerCase().contains('total'));
       int idxFull  = header.indexWhere((h) => h.toLowerCase().contains('filled'));
       int idxNotes = header.indexWhere((h) => h.toLowerCase().contains('notes'));
 
-      if (idxPpl == -1) {
-        idxPpl = header.indexWhere((h) => h.toLowerCase().contains('price'));
+      // If we still cannot find some indexes, try a looser match
+      if (idxVol == -1) {
+        idxVol = header.indexWhere((h) => h.toLowerCase().contains('litre') || h.toLowerCase().contains('liter'));
       }
       if (idxFull == -1) {
         idxFull = header.indexWhere((h) => h.toLowerCase().contains('tank'));
+      }
+
+      // If even core fields are missing, bail out gracefully
+      if (idxDate == -1 || idxVol == -1) {
+        emit(state.copyWith(loading: false, error: 'CSV does not have required columns: Date and Volume'));
+        return 0;
+      }
+
+      double _toDouble(dynamic v) {
+        if (v == null) return 0.0;
+        final s = v.toString().replaceAll(',', '').trim();
+        return double.tryParse(s) ?? 0.0;
+      }
+
+      bool _toBool(dynamic v) {
+        final s = (v ?? '').toString().trim().toLowerCase();
+        // Accept many forms
+        return s == 'yes' || s == 'true' || s == '1' || s == 'y';
+      }
+
+      DateTime? _toDate(dynamic v) {
+        if (v == null) return null;
+        final s = v.toString().trim();
+        // Try standard parse
+        try {
+          return DateTime.parse(s);
+        } catch (_) {
+          // Common fallback formats
+          for (final fmt in const [
+            'yyyy/MM/dd HH:mm',
+            'yyyy/MM/dd',
+            'dd/MM/yyyy HH:mm',
+            'dd/MM/yyyy',
+            'MM/dd/yyyy HH:mm',
+            'MM/dd/yyyy',
+            'yyyy-MM-dd',
+          ]) {
+            try {
+              // Very small lightweight parser set
+              // For simplicity keep DateTime.parse. If needed, add intl parsing here.
+              // If format not parseable by DateTime.parse, skip.
+              return DateTime.parse(s);
+            } catch (_) {}
+          }
+        }
+        return null;
       }
 
       for (int i = 1; i < rows.length; i++) {
         final row = rows[i];
         if (row.isEmpty) continue;
 
-        double _toDouble(dynamic v) {
-          if (v == null) return 0.0;
-          final s = v.toString().replaceAll(',', '').trim();
-          return double.tryParse(s) ?? 0.0;
-        }
-
-        bool _toBool(dynamic v) {
-          final s = (v ?? '').toString().trim().toLowerCase();
-          return s == 'yes' || s == 'true' || s == '1';
-        }
-
-        DateTime? _toDate(dynamic v) {
-          if (v == null) return null;
-          final s = v.toString().trim();
-          try {
-            return DateTime.parse(s);
-          } catch (_) {
-            return null;
-          }
-        }
-
-        final odometer = idxOdo   >= 0 ? _toDouble(row[idxOdo])   : 0.0;
-        final date     = idxDate  >= 0 ? _toDate(row[idxDate])    : null;
-        final volume   = idxVol   >= 0 ? _toDouble(row[idxVol])   : 0.0;
-        final pricePerL= idxPpl   >= 0 ? _toDouble(row[idxPpl])   : null;
-        final totalCost= idxTotal >= 0 ? _toDouble(row[idxTotal]) : null;
-        final isFull   = idxFull  >= 0 ? _toBool(row[idxFull])    : false;
-        final notes    = idxNotes >= 0 ? row[idxNotes]?.toString() : null;
+        final odometer = idxOdo   >= 0 && idxOdo   < row.length ? _toDouble(row[idxOdo])   : 0.0;
+        final date     = idxDate  >= 0 && idxDate  < row.length ? _toDate(row[idxDate])    : null;
+        final volume   = idxVol   >= 0 && idxVol   < row.length ? _toDouble(row[idxVol])   : 0.0;
+        final pricePerL= idxPpl   >= 0 && idxPpl   < row.length ? _toDouble(row[idxPpl])   : null;
+        final totalCost= idxTotal >= 0 && idxTotal < row.length ? _toDouble(row[idxTotal]) : null;
+        final isFull   = idxFull  >= 0 && idxFull  < row.length ? _toBool(row[idxFull])    : false;
+        final notes    = idxNotes >= 0 && idxNotes < row.length ? row[idxNotes]?.toString() : null;
 
         if (date == null || volume <= 0) {
           continue;
