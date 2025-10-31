@@ -44,7 +44,7 @@ class _FuelRecordEditScreenState extends State<FuelRecordEditScreen> {
     _odoCtrl.text = i?.odometer.toStringAsFixed(0) ?? '';
     _priceCtrl.text = i?.pricePerL?.toStringAsFixed(2) ?? '';
     _totalCtrl.text = i?.totalCost?.toStringAsFixed(2) ?? '';
-    _volCtrl.text = i?.volume.toStringAsFixed(2) ?? '';
+    _volCtrl.text = i?.volume.toStringAsFixed(3) ?? '';
     _notesCtrl.text = i?.notes ?? '';
     _fullTank = i?.isFullTank ?? false;
 
@@ -166,7 +166,13 @@ class _FuelRecordEditScreenState extends State<FuelRecordEditScreen> {
 
     await _updateVehicleMileageIfHigher(widget.vehicleId, odometer);
 
-    final cubit = BlocProvider.maybeOf<FuelRecordsCubit>(context);
+    // Safe attempt to refresh list without relying on maybeOf
+    FuelRecordsCubit? cubit;
+    try {
+      cubit = context.read<FuelRecordsCubit>();
+    } catch (_) {
+      cubit = null;
+    }
     if (cubit != null) {
       await cubit.load();
     }

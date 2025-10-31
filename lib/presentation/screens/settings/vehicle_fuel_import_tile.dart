@@ -6,7 +6,6 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:intl/intl.dart';
 
-import 'package:collection/collection.dart';
 import 'package:carvita/data/models/fuel_record.dart';
 import 'package:carvita/data/repositories/fuel_repository.dart';
 import 'package:carvita/data/sources/local/database_helper.dart';
@@ -166,7 +165,7 @@ class _VehicleFuelImportTileState extends State<VehicleFuelImportTile> {
     );
   }
 
-  // small helpers and CSV parsing
+  // helpers
 
   Future<void> _updateVehicleMileageIfHigher(int vehicleId, double newMileage) async {
     final db = await DatabaseHelper().database;
@@ -216,7 +215,7 @@ class _VehicleFuelImportTileState extends State<VehicleFuelImportTile> {
     final data = <Map<String, dynamic>>[];
     for (int i = 1; i < rows.length; i++) {
       final parts = _splitCsvRow(rows[i]);
-      final map = <Map<String, dynamic>>{};
+      final map = <String, dynamic>{};
       for (int c = 0; c < parts.length && c < header.length; c++) {
         map[header[c]] = parts[c];
       }
