@@ -96,7 +96,6 @@ class _DashboardScreenState extends State<DashboardScreen>
   // === Add Fuel quick action handlers ===
 
   Future<int?> _pickVehicleId(BuildContext context) async {
-    // Try to get already loaded vehicles from the cubit
     final state = context.read<VehicleCubit>().state;
     List<Vehicle> vehicles = [];
     if (state is VehicleLoaded) {
@@ -104,7 +103,6 @@ class _DashboardScreenState extends State<DashboardScreen>
     }
 
     if (vehicles.isEmpty) {
-      // Trigger a fetch and show a simple message
       context.read<VehicleCubit>().fetchVehicles();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -133,20 +131,17 @@ class _DashboardScreenState extends State<DashboardScreen>
   }
 
   Future<void> _handleAddFuelQuickAction(BuildContext context) async {
-    // Prefer default vehicle if available
     int? vehicleId = await _preferencesService.getDefaultVehicleId();
     if (vehicleId == null) {
       vehicleId = await _pickVehicleId(context);
     }
     if (vehicleId == null) return;
 
-    // Open editor
     await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => FuelRecordEditScreen(
-          vehicleId: vehicleId,
+          vehicleId: vehicleId!, // <- fixed
           onSave: (_) async {
-            // After save, refresh dashboard data
             final l10n = AppLocalizations.of(context);
             context.read<VehicleCubit>().fetchVehicles();
             context
@@ -157,7 +152,6 @@ class _DashboardScreenState extends State<DashboardScreen>
       ),
     );
 
-    // Also refresh after returning, just in case onSave was not called
     final l10n = AppLocalizations.of(context);
     context.read<VehicleCubit>().fetchVehicles();
     context.read<UpcomingMaintenanceCubit>().loadAllUpcomingMaintenance(l10n);
@@ -377,7 +371,6 @@ class _DashboardScreenState extends State<DashboardScreen>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Quick Actions
                   Row(
                     children: [
                       QuickActionButton(
@@ -401,7 +394,6 @@ class _DashboardScreenState extends State<DashboardScreen>
                         },
                       ),
                       const SizedBox(width: 15),
-                      // New Add Fuel quick action
                       QuickActionButton(
                         label: 'Add Fuel',
                         icon: Icons.local_gas_station_outlined,
@@ -410,8 +402,6 @@ class _DashboardScreenState extends State<DashboardScreen>
                     ],
                   ),
                   const SizedBox(height: 25),
-
-                  // Urgent Reminders
                   Text(
                     AppLocalizations.of(context)!.urgentReminders,
                     style: TextStyle(
@@ -440,8 +430,6 @@ class _DashboardScreenState extends State<DashboardScreen>
                       ),
                     ),
                   const SizedBox(height: 15),
-
-                  // My Vehicles
                   Text(
                     AppLocalizations.of(context)!.myVehicles,
                     style: TextStyle(
