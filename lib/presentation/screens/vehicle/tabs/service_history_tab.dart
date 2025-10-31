@@ -47,9 +47,9 @@ class _ServiceHistoryTabState extends State<ServiceHistoryTab> {
             style: TextStyle(color: Theme.of(context).colorScheme.onSurface),
           ),
           content: Text(
-            AppLocalizations.of(
-              context,
-            )!.deleteConfirmMLog(logWithItems.entry.serviceDate),
+            AppLocalizations.of(context)!.deleteConfirmMLog(
+              logWithItems.entry.serviceDate,
+            ),
             style: TextStyle(color: Theme.of(context).colorScheme.onSurface),
           ),
           actions: <Widget>[
@@ -79,8 +79,8 @@ class _ServiceHistoryTabState extends State<ServiceHistoryTab> {
           (cubit.state is ServiceLogOperationSuccess ||
               cubit.state is ServiceLogLoaded)) {
         context.read<UpcomingMaintenanceCubit>().loadAllUpcomingMaintenance(
-          AppLocalizations.of(context),
-        );
+              AppLocalizations.of(context),
+            );
       }
     }
   }
@@ -113,6 +113,7 @@ class _ServiceHistoryTabState extends State<ServiceHistoryTab> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // Header row
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -165,18 +166,23 @@ class _ServiceHistoryTabState extends State<ServiceHistoryTab> {
                   ),
                 ],
               ),
+
               const SizedBox(height: 15),
+
+              // Loading
               if (state is ServiceLogLoading)
                 const Center(child: CircularProgressIndicator()),
+
+              // Loaded
               if (state is ServiceLogLoaded)
                 if (state.serviceLogs.isEmpty)
                   Center(
                     child: Padding(
-                      padding: EdgeInsets.symmetric(vertical: 30.0),
+                      padding: const EdgeInsets.symmetric(vertical: 30.0),
                       child: Text(
-                        AppLocalizations.of(
-                          context,
-                        )!.emptyMLog(AppLocalizations.of(context)!.addMLog),
+                        AppLocalizations.of(context)!.emptyMLog(
+                          AppLocalizations.of(context)!.addMLog,
+                        ),
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           color: Theme.of(context).colorScheme.onSurface,
@@ -196,10 +202,9 @@ class _ServiceHistoryTabState extends State<ServiceHistoryTab> {
                       final entry = logWithItems.entry;
 
                       return Card(
-                        color:
-                            Theme.of(
-                              context,
-                            ).colorScheme.surfaceContainerLowest,
+                        color: Theme.of(context)
+                            .colorScheme
+                            .surfaceContainerLowest,
                         elevation: 1,
                         margin: const EdgeInsets.only(bottom: 12),
                         shape: RoundedRectangleBorder(
@@ -219,6 +224,7 @@ class _ServiceHistoryTabState extends State<ServiceHistoryTab> {
                           child: Row(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
+                              // left column
                               Expanded(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -228,10 +234,9 @@ class _ServiceHistoryTabState extends State<ServiceHistoryTab> {
                                       style: TextStyle(
                                         fontSize: 16,
                                         fontWeight: FontWeight.w500,
-                                        color:
-                                            Theme.of(
-                                              context,
-                                            ).colorScheme.onSurface,
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onSurface,
                                       ),
                                     ),
                                     const SizedBox(height: 8),
@@ -257,9 +262,8 @@ class _ServiceHistoryTabState extends State<ServiceHistoryTab> {
                                       ),
                                     if (entry.cost != null)
                                       Text(
-                                        AppLocalizations.of(
-                                          context,
-                                        )!.costWithSign(entry.cost!),
+                                        AppLocalizations.of(context)!
+                                            .costWithSign(entry.cost!),
                                         style: TextStyle(
                                           fontSize: 13,
                                           color: Theme.of(context)
@@ -286,10 +290,14 @@ class _ServiceHistoryTabState extends State<ServiceHistoryTab> {
                                   ],
                                 ),
                               ),
+
+                              // right actions
                               PopupMenuButton<String>(
                                 icon: Icon(
                                   Icons.more_vert,
-                                  color: Theme.of(context).colorScheme.onSurface
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSurface
                                       .withValues(alpha: 0.6),
                                 ),
                                 onSelected: (String value) {
@@ -310,76 +318,53 @@ class _ServiceHistoryTabState extends State<ServiceHistoryTab> {
                                     _confirmDeleteLog(context, logWithItems);
                                   }
                                 },
-                                itemBuilder:
-                                    (
-                                      BuildContext bc,
-                                    ) => <PopupMenuEntry<String>>[
-                                      PopupMenuItem<String>(
-                                        value: 'edit',
-                                        child: Row(
-                                          children: [
-                                            Icon(
-                                              Icons.edit_outlined,
-                                              color:
-                                                  Theme.of(
-                                                    context,
-                                                  ).colorScheme.primary,
-                                              size: 20,
-                                            ),
-                                            SizedBox(width: 8),
-                                            Text(
-                                              AppLocalizations.of(
-                                                context,
-                                              )!.edit,
-                                              style: TextStyle(
-                                                color:
-                                                    Theme.of(
-                                                      context,
-                                                    ).colorScheme.onSurface,
-                                              ),
-                                            ),
-                                          ],
+                                itemBuilder: (BuildContext bc) =>
+                                    <PopupMenuEntry<String>>[
+                                  PopupMenuItem<String>(
+                                    value: 'edit',
+                                    child: Row(
+                                      children: [
+                                        Icon(
+                                          Icons.edit_outlined,
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .primary,
+                                          size: 20,
                                         ),
-                                      ),
-                                      PopupMenuItem<String>(
-                                        value: 'delete',
-                                        child: Row(
-                                          children: [
-                                            Icon(
-                                              Icons.delete_outline,
-                                              color: AppColors.urgentReminderText,
-                                              size: 20,
-                                            ),
-                                            SizedBox(width: 8),
-                                            Text(
-                                              AppLocalizations.of(context)!.delete,
-                                              style: TextStyle(
-                                                color: Theme.of(context).colorScheme.onSurface,
-                                              ),
-                                            ),
-                                          ],
+                                        const SizedBox(width: 8),
+                                        Text(
+                                          AppLocalizations.of(context)!.edit,
+                                          style: TextStyle(
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .onSurface,
+                                          ),
                                         ),
-                                      ),
-                                  
-                                          
-// --- Fuel Records section ---
-const SizedBox(height: 16),
-const Divider(height: 0),
-Padding(
-  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-  child: Text(
-    'Fuel Records',
-    style: Theme.of(context).textTheme.titleMedium,
-  ),
-),
-FuelRecordsListSection(vehicleId: widget.vehicleId),
-// --- end Fuel Records section ---
-
-
-],
+                                      ],
+                                    ),
+                                  ),
+                                  PopupMenuItem<String>(
+                                    value: 'delete',
+                                    child: Row(
+                                      children: [
+                                        const Icon(
+                                          Icons.delete_outline,
+                                          color: AppColors.urgentReminderText,
+                                          size: 20,
                                         ),
-                                      ),
-                                    ],
+                                        const SizedBox(width: 8),
+                                        Text(
+                                          AppLocalizations.of(context)!.delete,
+                                          style: TextStyle(
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .onSurface,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
                               ),
                             ],
                           ),
@@ -387,6 +372,20 @@ FuelRecordsListSection(vehicleId: widget.vehicleId),
                       );
                     },
                   ),
+
+              // --- Fuel Records section (outside the popup and outside the list items) ---
+              const SizedBox(height: 16),
+              const Divider(height: 0),
+              Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Text(
+                  'Fuel Records',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+              ),
+              FuelRecordsListSection(vehicleId: widget.vehicleId),
+              // --- end Fuel Records section ---
             ],
           ),
         );
