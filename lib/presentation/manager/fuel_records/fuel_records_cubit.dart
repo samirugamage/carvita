@@ -54,9 +54,9 @@ class FuelRecordsCubit extends Cubit<FuelRecordsState> {
   }
 
   /// Import CSV at [filePath]. Returns count imported.
-  /// Accepts files that start with a banner line like "##Refuelling" before the real header.
-  /// Expected header contains at least: "Odometer (km)", "Date", "Volume".
-  /// Optional columns: "Price / L", "Total cost", "Filled tank completely", "Notes".
+  /// Handles banner lines like "##Refuelling" before the real header.
+  /// Required columns: Date, Volume.
+  /// Optional columns: Odometer (km), Price / L, Total cost, Filled tank completely, Notes.
   Future<int> importCsv(String filePath) async {
     emit(state.copyWith(loading: true, error: null));
     int imported = 0;
@@ -64,29 +64,28 @@ class FuelRecordsCubit extends Cubit<FuelRecordsState> {
     try {
       final raw = await File(filePath).readAsString();
 
-      // Split into lines and find the first line that looks like the real header.
-      final lines = raw.split(RegExp(r'\r?\n')).where((l) => l.trim().isNotEmpty).toList();
+      // 1) Find the real header line. Skip banner lines like "##Refuelling".
+      final lines = raw
+          .split(RegExp(r'\r?\n'))
+          .where((l) => l.trim().isNotEmpty)
+          .toList();
 
       int headerLineIndex = -1;
+      bool _looksLikeHeader(String l) {
+        final s = l.toLowerCase();
+        return s.contains('date') && (s.contains('volume') || s.contains('fuel'));
+      }
+
       for (int i = 0; i < lines.length; i++) {
-        final l = lines[i].toLowerCase();
-        // Heuristic: the header line should contain these keywords
-        final looksLikeHeader =
-            l.contains('odometer') && l.contains('date') && (l.contains('volume') || l.contains('fuel'));
-        if (looksLikeHeader) {
+        if (_looksLikeHeader(lines[i])) {
           headerLineIndex = i;
           break;
         }
       }
+      if (headerLineIndex == -1) headerLineIndex = 0;
 
-      if (headerLineIndex == -1) {
-        // Fallback: keep old behavior so at least we do not crash
-        headerLineIndex = 0;
-      }
-
-      // Re-parse only from the detected header to the end
+      // 2) Parse from the header to end.
       final normalized = lines.sublist(headerLineIndex).join('\n');
-
       final rows = const CsvToListConverter(
         eol: '\n',
         shouldParseNumbers: false,
@@ -97,36 +96,34 @@ class FuelRecordsCubit extends Cubit<FuelRecordsState> {
         return 0;
       }
 
-      // Normalize header labels
-      final header = rows.first
-          .map((e) => (e?.toString() ?? '').trim())
-          .toList();
+      final header = rows.first.map((e) => (e?.toString() ?? '').trim()).toList();
 
-      int idxOdo   = header.indexWhere((h) => h.toLowerCase().contains('odometer'));
-      int idxDate  = header.indexWhere((h) => h.toLowerCase().startsWith('date'));
-      int idxVol   = header.indexWhere((h) => h.toLowerCase().contains('volume'));
-
-      // Price per L variants
-      int idxPpl   = header.indexWhere((h) {
-        final s = h.replaceAll(' ', '').toLowerCase();
-        return s == 'price/l' || s == 'priceperl' || h.toLowerCase().startsWith('price');
-      });
-
-      int idxTotal = header.indexWhere((h) => h.toLowerCase().contains('total'));
-      int idxFull  = header.indexWhere((h) => h.toLowerCase().contains('filled'));
-      int idxNotes = header.indexWhere((h) => h.toLowerCase().contains('notes'));
-
-      // If we still cannot find some indexes, try a looser match
-      if (idxVol == -1) {
-        idxVol = header.indexWhere((h) => h.toLowerCase().contains('litre') || h.toLowerCase().contains('liter'));
-      }
-      if (idxFull == -1) {
-        idxFull = header.indexWhere((h) => h.toLowerCase().contains('tank'));
+      int _idx(List<String> opts) {
+        for (int i = 0; i < header.length; i++) {
+          final h = header[i].toLowerCase().replaceAll(' ', '');
+          for (final o in opts) {
+            if (h.contains(o)) return i;
+          }
+        }
+        return -1;
       }
 
-      // If even core fields are missing, bail out gracefully
+      final idxOdo   = _idx(['odometer']);
+      final idxDate  = _idx(['date']);
+      int idxVol     = _idx(['volume','litre','liter']);
+      int idxPpl     = _idx(['price/l','priceperl','price']);
+      final idxTotal = _idx(['total']);
+      int idxFull    = _idx(['filled','tank']);
+      final idxNotes = _idx(['notes']);
+
+      if (idxVol == -1) idxVol = _idx(['litre','liter']);
+      if (idxFull == -1) idxFull = _idx(['tank']);
+
       if (idxDate == -1 || idxVol == -1) {
-        emit(state.copyWith(loading: false, error: 'CSV does not have required columns: Date and Volume'));
+        emit(state.copyWith(
+          loading: false,
+          error: 'CSV needs Date and Volume columns',
+        ));
         return 0;
       }
 
@@ -138,53 +135,33 @@ class FuelRecordsCubit extends Cubit<FuelRecordsState> {
 
       bool _toBool(dynamic v) {
         final s = (v ?? '').toString().trim().toLowerCase();
-        // Accept many forms
         return s == 'yes' || s == 'true' || s == '1' || s == 'y';
       }
 
       DateTime? _toDate(dynamic v) {
         if (v == null) return null;
         final s = v.toString().trim();
-        // Try standard parse
         try {
+          // Handles "2025-08-07 12:24:19"
           return DateTime.parse(s);
         } catch (_) {
-          // Common fallback formats
-          for (final fmt in const [
-            'yyyy/MM/dd HH:mm',
-            'yyyy/MM/dd',
-            'dd/MM/yyyy HH:mm',
-            'dd/MM/yyyy',
-            'MM/dd/yyyy HH:mm',
-            'MM/dd/yyyy',
-            'yyyy-MM-dd',
-          ]) {
-            try {
-              // Very small lightweight parser set
-              // For simplicity keep DateTime.parse. If needed, add intl parsing here.
-              // If format not parseable by DateTime.parse, skip.
-              return DateTime.parse(s);
-            } catch (_) {}
-          }
+          return null;
         }
-        return null;
       }
 
       for (int i = 1; i < rows.length; i++) {
         final row = rows[i];
         if (row.isEmpty) continue;
 
-        final odometer = idxOdo   >= 0 && idxOdo   < row.length ? _toDouble(row[idxOdo])   : 0.0;
-        final date     = idxDate  >= 0 && idxDate  < row.length ? _toDate(row[idxDate])    : null;
-        final volume   = idxVol   >= 0 && idxVol   < row.length ? _toDouble(row[idxVol])   : 0.0;
-        final pricePerL= idxPpl   >= 0 && idxPpl   < row.length ? _toDouble(row[idxPpl])   : null;
-        final totalCost= idxTotal >= 0 && idxTotal < row.length ? _toDouble(row[idxTotal]) : null;
-        final isFull   = idxFull  >= 0 && idxFull  < row.length ? _toBool(row[idxFull])    : false;
-        final notes    = idxNotes >= 0 && idxNotes < row.length ? row[idxNotes]?.toString() : null;
+        final date      = idxDate  >= 0 && idxDate  < row.length ? _toDate(row[idxDate])    : null;
+        final volume    = idxVol   >= 0 && idxVol   < row.length ? _toDouble(row[idxVol])   : 0.0;
+        final odometer  = idxOdo   >= 0 && idxOdo   < row.length ? _toDouble(row[idxOdo])   : 0.0;
+        final pricePerL = idxPpl   >= 0 && idxPpl   < row.length ? _toDouble(row[idxPpl])   : null;
+        final totalCost = idxTotal >= 0 && idxTotal < row.length ? _toDouble(row[idxTotal]) : null;
+        final isFull    = idxFull  >= 0 && idxFull  < row.length ? _toBool(row[idxFull])    : false;
+        final notes     = idxNotes >= 0 && idxNotes < row.length ? row[idxNotes]?.toString() : null;
 
-        if (date == null || volume <= 0) {
-          continue;
-        }
+        if (date == null || volume <= 0) continue;
 
         final rec = FuelRecord(
           vehicleId: vehicleId,

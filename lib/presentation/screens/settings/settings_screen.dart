@@ -31,6 +31,7 @@ import 'package:carvita/presentation/manager/theme_provider.dart';
 import 'package:carvita/presentation/manager/upcoming_maintenance/upcoming_maintenance_cubit.dart';
 import 'package:carvita/presentation/manager/vehicle_list/vehicle_cubit.dart';
 import 'package:carvita/presentation/screens/common_widgets/main_bottom_navigation_bar.dart';
+import 'package:carvita/presentation/screens/settings/vehicle_fuel_import_tile.dart';
 
 import 'package:carvita/presentation/manager/vehicle_list/vehicle_state.dart'
     as vehicle_list_state_import;
@@ -487,7 +488,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                     onPressed: () {
                       Navigator.of(dialogContext).pop();
-                      SystemNavigator.pop(); // try exit the app (may not apply to all platforms)
+                      SystemNavigator.pop();
                     },
                   ),
                 ],
@@ -513,7 +514,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         );
       }
-      // Try to reopen the database connection in case the app is in an unstable state after failure
       await DatabaseHelper().database;
     } finally {
       if (mounted) setState(() => _isImporting = false);
@@ -825,7 +825,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: ColorPicker(
               pickerColor: pickerColor,
               onColorChanged: (color) => pickerColor = color,
-              enableAlpha: false, // Usually seed colors don't need alpha
+              enableAlpha: false,
               pickerAreaHeightPercent: 0.8,
             ),
           ),
@@ -1087,6 +1087,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _buildSettingsCard(
               title: AppLocalizations.of(context)!.data,
               children: [
+                // New import tile
+                const VehicleFuelImportTile(),
+
                 _buildSettingItem(
                   icon: Icons.cloud_download_outlined,
                   label: AppLocalizations.of(context)!.restoreData,
@@ -1191,7 +1194,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
         bottomNavigationBar: const MainBottomNavigationBar(
           currentIndex: 3,
-        ), // Index for Settings
+        ),
       ),
     );
   }
