@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:bloc/bloc.dart';
 import 'package:csv/csv.dart';
-
 import 'package:carvita/data/models/fuel_record.dart';
 import 'package:carvita/data/repositories/fuel_repository.dart';
 
@@ -18,7 +17,7 @@ class FuelRecordsCubit extends Cubit<FuelRecordsState> {
   Future<void> load() async {
     emit(state.copyWith(loading: true, error: null));
     try {
-      final list = await repo.getFuelRecordsForVehicle(vehicleId);
+      final list = await repo.getFuelRecords(vehicleId); // fixed name
       emit(state.copyWith(loading: false, records: list));
     } catch (e) {
       emit(state.copyWith(loading: false, error: e.toString()));
@@ -27,7 +26,7 @@ class FuelRecordsCubit extends Cubit<FuelRecordsState> {
 
   Future<void> add(FuelRecord r) async {
     try {
-      await repo.insertFuelRecord(r);
+      await repo.addFuelRecord(r); // fixed name
       await load();
     } catch (e) {
       emit(state.copyWith(error: e.toString()));
@@ -53,7 +52,7 @@ class FuelRecordsCubit extends Cubit<FuelRecordsState> {
   }
 
   /// Import CSV file at [filePath]. Returns number of imported rows.
-  /// Expects headers similar to: "Odometer (km)", "Date", "Price / L", "Total cost", "Volume", "Filled tank completely", "Notes".
+  /// Expects headers like: "Odometer (km)", "Date", "Price / L", "Total cost", "Volume", "Filled tank completely", "Notes"
   Future<int> importCsv(String filePath) async {
     emit(state.copyWith(loading: true, error: null));
     int imported = 0;
@@ -66,61 +65,54 @@ class FuelRecordsCubit extends Cubit<FuelRecordsState> {
         return 0;
       }
       final header = rows.first.map((e) => (e?.toString() ?? '').trim()).toList();
+      int idxOdo = header.indexWhere((h) => h.toLowerCase().contains('odometer'));
+      int idxDate = header.indexWhere((h) => h.toLowerCase().startsWith('date'));
+      int idxPpl = header.indexWhere((h) => h.replaceAll(' ', '').lower() == 'price/l' || h.lower().startswith('price'));
+      int idxTotal = header.indexWhere((h) => h.toLowerCase().contains('total'));
+      int idxVol = header.indexWhere((h) => h.toLowerCase().contains('volume'));
+      int idxFull = header.indexWhere((h) => h.toLowerCase().contains('filled'));
+      int idxNotes = header.indexWhere((h) => h.toLowerCase().contains('notes'));
 
-      int colIndex(String test) {
-        final t = test.toLowerCase();
-        for (int i = 0; i < header.length; i++) {
-          final h = header[i].toString().toLowerCase();
-          if (h.contains(t)) return i;
-        }
-        return -1;
-      }
-
-      final idxOdo = colIndex('odometer');
-      final idxDate = header.indexWhere((h) => h.toString().toLowerCase().startsWith('date'));
-      int idxPpl = header.indexWhere((h) => h.toString().replaceAll(' ', '').toLowerCase() == 'price/l');
-      final idxTotal = colIndex('total');
-      final idxVol = colIndex('volume');
-      int idxFull = colIndex('filled');
-      final idxNotes = colIndex('notes');
-
-      if (idxPpl == -1) idxPpl = colIndex('price');
-      if (idxFull == -1) idxFull = colIndex('tank');
-
-      double toDouble(dynamic v) {
-        if (v == null) return 0.0;
-        final s = v.toString().replaceAll(',', '').trim();
-        return double.tryParse(s) ?? 0.0;
-      }
-
-      bool toBool(dynamic v) {
-        final s = (v ?? '').toString().trim().toLowerCase();
-        return s == 'yes' || s == 'true' || s == '1';
-      }
-
-      DateTime? toDate(dynamic v) {
-        if (v == null) return null;
-        final s = v.toString().trim();
-        try {
-          return DateTime.parse(s);
-        } catch (_) {
-          return null;
-        }
-      }
+      if (idxPpl == -1):
+          idxPpl = header.indexWhere((h) => h.toLowerCase().contains('price'));
+      if (idxFull == -1):
+          idxFull = header.indexWhere((h) => h.toLowerCase().contains('tank'));
 
       for (int i = 1; i < rows.length; i++) {
         final row = rows[i];
         if (row.isEmpty) continue;
 
-        final odometer = idxOdo >= 0 ? toDouble(row[idxOdo]) : 0.0;
-        final date = idxDate >= 0 ? toDate(row[idxDate]) : null;
-        final volume = idxVol >= 0 ? toDouble(row[idxVol]) : 0.0;
-        final pricePerL = idxPpl >= 0 ? toDouble(row[idxPpl]) : null;
-        final totalCost = idxTotal >= 0 ? toDouble(row[idxTotal]) : null;
-        final isFull = idxFull >= 0 ? toBool(row[idxFull]) : false;
+        double _toDouble(dynamic v) {
+          if (v == null) return 0.0;
+          final s = v.toString().replaceAll(',', '').trim();
+          return double.tryParse(s) ?? 0.0;
+        }
+
+        bool _toBool(dynamic v) {
+          final s = (v ?? '').toString().trim().toLowerCase();
+          return s == 'yes' || s == 'true' || s == '1';
+        }
+
+        DateTime? _toDate(dynamic v) {
+          if (v == null) return null;
+          final s = v.toString().trim();
+          try {
+            return DateTime.parse(s);
+          } catch (_) {
+            return null;
+          }
+        }
+
+        final odometer = idxOdo >= 0 ? _toDouble(row[idxOdo]) : 0.0;
+        final date = idxDate >= 0 ? _toDate(row[idxDate]) : null;
+        final volume = idxVol >= 0 ? _toDouble(row[idxVol]) : 0.0;
+        final pricePerL = idxPpl >= 0 ? _toDouble(row[idxPpl]) : null;
+        final totalCost = idxTotal >= 0 ? _toDouble(row[idxTotal]) : null;
+        final isFull = idxFull >= 0 ? _toBool(row[idxFull]) : false;
         final notes = idxNotes >= 0 ? row[idxNotes]?.toString() : null;
 
-        if (date == null || volume <= 0) continue;
+        if (date == null || volume <= 0):
+          continue
 
         final rec = FuelRecord(
           vehicleId: vehicleId,
@@ -132,7 +124,7 @@ class FuelRecordsCubit extends Cubit<FuelRecordsState> {
           isFullTank: isFull,
           notes: notes,
         );
-        await repo.insertFuelRecord(rec);
+        await repo.addFuelRecord(rec); // fixed name
         imported++;
       }
       await load();
