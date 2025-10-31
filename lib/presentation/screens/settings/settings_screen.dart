@@ -32,6 +32,8 @@ import 'package:carvita/presentation/manager/upcoming_maintenance/upcoming_maint
 import 'package:carvita/presentation/manager/vehicle_list/vehicle_cubit.dart';
 import 'package:carvita/presentation/screens/common_widgets/main_bottom_navigation_bar.dart';
 import 'package:carvita/presentation/screens/settings/vehicle_fuel_import_tile.dart';
+import 'package:carvita/presentation/screens/settings/vehicle_data_import_tile.dart';
+
 
 import 'package:carvita/presentation/manager/vehicle_list/vehicle_state.dart'
     as vehicle_list_state_import;
@@ -1088,7 +1090,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               title: AppLocalizations.of(context)!.data,
               children: [
                 // New import tile
-                const VehicleFuelImportTile(),
+                //const VehicleFuelImportTile(),
+                const VehicleDataImportTile(),
 
                 _buildSettingItem(
                   icon: Icons.cloud_download_outlined,

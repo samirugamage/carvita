@@ -22,6 +22,9 @@ import 'package:carvita/presentation/screens/common_widgets/main_bottom_navigati
 import 'package:carvita/presentation/screens/dashboard/widgets/quick_action_button.dart';
 import 'package:carvita/presentation/screens/dashboard/widgets/vehicle_summary_card.dart';
 
+// Add fuel editor import
+import 'package:carvita/presentation/screens/fuel/fuel_record_edit_screen.dart';
+
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
 
@@ -88,6 +91,76 @@ class _DashboardScreenState extends State<DashboardScreen>
         });
       }
     }
+  }
+
+  // === Add Fuel quick action handlers ===
+
+  Future<int?> _pickVehicleId(BuildContext context) async {
+    // Try to get already loaded vehicles from the cubit
+    final state = context.read<VehicleCubit>().state;
+    List<Vehicle> vehicles = [];
+    if (state is VehicleLoaded) {
+      vehicles = state.vehicles;
+    }
+
+    if (vehicles.isEmpty) {
+      // Trigger a fetch and show a simple message
+      context.read<VehicleCubit>().fetchVehicles();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(AppLocalizations.of(context)!.loading),
+          ),
+        );
+      }
+      return null;
+    }
+
+    return showDialog<int?>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: Text(AppLocalizations.of(context)!.chooseDefaultVehicle),
+        children: [
+          ...vehicles.map(
+            (v) => SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, v.id),
+              child: Text(v.name),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _handleAddFuelQuickAction(BuildContext context) async {
+    // Prefer default vehicle if available
+    int? vehicleId = await _preferencesService.getDefaultVehicleId();
+    if (vehicleId == null) {
+      vehicleId = await _pickVehicleId(context);
+    }
+    if (vehicleId == null) return;
+
+    // Open editor
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => FuelRecordEditScreen(
+          vehicleId: vehicleId!,
+          onSave: (_) async {
+            // After save, refresh dashboard data
+            final l10n = AppLocalizations.of(context);
+            context.read<VehicleCubit>().fetchVehicles();
+            context
+                .read<UpcomingMaintenanceCubit>()
+                .loadAllUpcomingMaintenance(l10n);
+          },
+        ),
+      ),
+    );
+
+    // Also refresh after returning, just in case onSave was not called
+    final l10n = AppLocalizations.of(context);
+    context.read<VehicleCubit>().fetchVehicles();
+    context.read<UpcomingMaintenanceCubit>().loadAllUpcomingMaintenance(l10n);
   }
 
   Widget _buildDashboardUrgentReminders(
@@ -326,6 +399,13 @@ class _DashboardScreenState extends State<DashboardScreen>
                               .read<QuickActionService>()
                               .handleLogMaintenanceRequest(context);
                         },
+                      ),
+                      const SizedBox(width: 15),
+                      // New Add Fuel quick action
+                      QuickActionButton(
+                        label: 'Add Fuel',
+                        icon: Icons.local_gas_station_outlined,
+                        onPressed: () => _handleAddFuelQuickAction(context),
                       ),
                     ],
                   ),
