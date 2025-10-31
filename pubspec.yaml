@@ -30,6 +30,8 @@ dependencies:
   timezone: ^0.10.1
   transparent_image: ^2.0.1
   url_launcher: ^6.3.1
+  # New dependency for CSV parsing when importing fuel/service data
+  csv: ^5.0.0
 
 dev_dependencies:
   flutter_test:

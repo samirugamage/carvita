@@ -7,7 +7,15 @@ import 'package:carvita/data/models/maintenance_plan_item.dart';
 import 'package:carvita/data/models/service_log_entry.dart';
 import 'package:carvita/data/models/service_log_performed_item_link.dart';
 import 'package:carvita/data/models/vehicle.dart';
+import 'package:carvita/data/models/fuel_record.dart';
 
+/// A helper class for interacting with the local SQLite database.
+///
+/// This class encapsulates all database creation, migration and CRUD
+/// operations.  When upgrading from database version 1 to 2 it adds a
+/// `tank_capacity` column to the `vehicles` table and introduces a new
+/// `fuel_records` table.  If further schema changes are required in future
+/// versions they should be handled in [onUpgrade].
 class DatabaseHelper {
   static final DatabaseHelper _instance = DatabaseHelper._internal();
   factory DatabaseHelper() => _instance;
@@ -15,25 +23,28 @@ class DatabaseHelper {
 
   static Database? _database;
   static const String dbName = 'carvita_v1.db';
-  static const int _dbVersion = 1;
+  // Increment the version when altering the schema.  Version 2 introduces
+  // tank_capacity in vehicles and the fuel_records table.
+  static const int _dbVersion = 2;
 
   Future<Database> get database async {
     if (_database != null) return _database!;
     _database = await _initDB();
     return _database!;
-  }
+    }
 
   Future<Database> _initDB() async {
-    String path = join(await getDatabasesPath(), dbName);
+    final String path = join(await getDatabasesPath(), dbName);
     return await openDatabase(
       path,
       version: _dbVersion,
       onCreate: _onCreate,
-      // onUpgrade: _onUpgrade,
+      onUpgrade: _onUpgrade,
     );
   }
 
   Future<void> _onCreate(Database db, int version) async {
+    // Vehicles table with tank_capacity
     await db.execute('''
       CREATE TABLE vehicles (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -45,7 +56,8 @@ class DatabaseHelper {
         model TEXT,
         plate_number TEXT,
         vin TEXT,
-        engine_number TEXT
+        engine_number TEXT,
+        tank_capacity REAL
       )
     ''');
 
@@ -60,7 +72,7 @@ class DatabaseHelper {
         firstIntervalMileage INTEGER,
         notes TEXT,
         isActive INTEGER DEFAULT 1 NOT NULL,
-        FOREIGN KEY (vehicleId) REFERENCES vehicles (id) ON DELETE CASCADE 
+        FOREIGN KEY (vehicleId) REFERENCES vehicles (id) ON DELETE CASCADE
       )
     ''');
 
@@ -80,20 +92,56 @@ class DatabaseHelper {
       CREATE TABLE service_log_performed_items (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         serviceLogId INTEGER NOT NULL,
-        maintenancePlanItemId INTEGER, 
+        maintenancePlanItemId INTEGER,
         customItemName TEXT,
         FOREIGN KEY (serviceLogId) REFERENCES service_log_entries (id) ON DELETE CASCADE,
-        FOREIGN KEY (maintenancePlanItemId) REFERENCES maintenance_plan_items (id) ON DELETE SET NULL 
+        FOREIGN KEY (maintenancePlanItemId) REFERENCES maintenance_plan_items (id) ON DELETE SET NULL
+      )
+    ''');
+
+    // New fuel_records table
+    await db.execute('''
+      CREATE TABLE fuel_records (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        vehicleId INTEGER NOT NULL,
+        date TEXT NOT NULL,
+        odometer REAL NOT NULL,
+        volume REAL NOT NULL,
+        pricePerL REAL,
+        totalCost REAL,
+        isFullTank INTEGER DEFAULT 0,
+        notes TEXT,
+        FOREIGN KEY (vehicleId) REFERENCES vehicles (id) ON DELETE CASCADE
       )
     ''');
   }
 
-  // --- vehicle CRUD ---
+  /// Handles database migrations from older versions.  When upgrading from
+  /// version 1 to 2 we add the tank_capacity column and the fuel_records table.
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await db.execute('ALTER TABLE vehicles ADD COLUMN tank_capacity REAL');
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS fuel_records (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          vehicleId INTEGER NOT NULL,
+          date TEXT NOT NULL,
+          odometer REAL NOT NULL,
+          volume REAL NOT NULL,
+          pricePerL REAL,
+          totalCost REAL,
+          isFullTank INTEGER DEFAULT 0,
+          notes TEXT,
+          FOREIGN KEY (vehicleId) REFERENCES vehicles (id) ON DELETE CASCADE
+        )
+      ''');
+    }
+  }
 
+  // ------------------- Vehicle CRUD -------------------
   Future<int> insertVehicle(Vehicle vehicle) async {
     final db = await database;
-    Map<String, dynamic> vehicleMap = vehicle.toMap();
-    vehicleMap.remove('id'); // make SQLite auto-increment
+    final vehicleMap = vehicle.toMap()..remove('id');
     return await db.insert(
       'vehicles',
       vehicleMap,
@@ -141,12 +189,10 @@ class DatabaseHelper {
     return await db.delete('vehicles', where: 'id = ?', whereArgs: [id]);
   }
 
-  // --- Maintenance plan CRUD ---
-
+  // ----------------- Maintenance Plan CRUD -----------------
   Future<int> insertMaintenancePlanItem(MaintenancePlanItem item) async {
     final db = await database;
-    Map<String, dynamic> itemMap = item.toMap();
-    itemMap.remove('id'); // make SQLite auto-increment
+    final itemMap = item.toMap()..remove('id');
     return await db.insert(
       'maintenance_plan_items',
       itemMap,
@@ -202,23 +248,17 @@ class DatabaseHelper {
     );
   }
 
-  // --- Maintenance log CRUD ---
-
+  // ------------------- Service Log CRUD -------------------
   Future<ServiceLogWithItems?> insertServiceLog(
     ServiceLogEntry logEntry,
     List<PerformedItemInput> performedItems,
   ) async {
     final db = await database;
     int logId = -1;
-
     await db.transaction((txn) async {
-      // Insert the main log entry
-      Map<String, dynamic> logMap = logEntry.toMap();
-      logMap.remove('id'); // Let SQLite autoincrement
+      final logMap = logEntry.toMap()..remove('id');
       logId = await txn.insert('service_log_entries', logMap);
-
-      // Insert performed items
-      for (var itemInput in performedItems) {
+      for (final itemInput in performedItems) {
         await txn.insert('service_log_performed_items', {
           'serviceLogId': logId,
           'maintenancePlanItemId': itemInput.maintenancePlanItemId,
@@ -227,9 +267,7 @@ class DatabaseHelper {
       }
     });
     if (logId != -1) {
-      return getServiceLogByIdWithItems(
-        logId,
-      ); // Fetch the newly created log with items
+      return getServiceLogByIdWithItems(logId);
     }
     return null;
   }
@@ -244,32 +282,28 @@ class DatabaseHelper {
       whereArgs: [vehicleId],
       orderBy: 'serviceDate DESC, id DESC',
     );
-
-    List<ServiceLogWithItems> logsWithItems = [];
-    for (var logMap in logMaps) {
+    final List<ServiceLogWithItems> logsWithItems = [];
+    for (final logMap in logMaps) {
       final entry = ServiceLogEntry.fromMap(logMap);
       final List<Map<String, dynamic>> performedItemMaps = await db.rawQuery(
         '''
-        SELECT 
-          slpi.id, 
-          slpi.serviceLogId, 
-          slpi.maintenancePlanItemId, 
-          slpi.customItemName,
-          mpi.itemName as predefinedItemName 
-        FROM service_log_performed_items slpi
-        LEFT JOIN maintenance_plan_items mpi ON slpi.maintenancePlanItemId = mpi.id
-        WHERE slpi.serviceLogId = ?
-      ''',
+          SELECT 
+            slpi.id,
+            slpi.serviceLogId,
+            slpi.maintenancePlanItemId,
+            slpi.customItemName,
+            mpi.itemName as predefinedItemName 
+          FROM service_log_performed_items slpi
+          LEFT JOIN maintenance_plan_items mpi ON slpi.maintenancePlanItemId = mpi.id
+          WHERE slpi.serviceLogId = ?
+        ''',
         [entry.id],
       );
-
-      List<String> displayNames =
-          performedItemMaps.map((map) {
-            return map['customItemName'] as String? ??
-                map['predefinedItemName'] as String? ??
-                'Unkonwn Item';
-          }).toList();
-
+      final List<String> displayNames = performedItemMaps.map((map) {
+        return map['customItemName'] as String? ??
+            map['predefinedItemName'] as String? ??
+            'Unknown Item';
+      }).toList();
       logsWithItems.add(
         ServiceLogWithItems(
           entry: entry,
@@ -287,32 +321,27 @@ class DatabaseHelper {
       where: 'id = ?',
       whereArgs: [logId],
     );
-
     if (logMaps.isEmpty) return null;
-
     final entry = ServiceLogEntry.fromMap(logMaps.first);
     final List<Map<String, dynamic>> performedItemMaps = await db.rawQuery(
       '''
-      SELECT 
-        slpi.id, 
-        slpi.serviceLogId, 
-        slpi.maintenancePlanItemId, 
-        slpi.customItemName,
-        mpi.itemName as predefinedItemName 
-      FROM service_log_performed_items slpi
-      LEFT JOIN maintenance_plan_items mpi ON slpi.maintenancePlanItemId = mpi.id
-      WHERE slpi.serviceLogId = ?
-    ''',
+        SELECT 
+          slpi.id,
+          slpi.serviceLogId,
+          slpi.maintenancePlanItemId,
+          slpi.customItemName,
+          mpi.itemName as predefinedItemName 
+        FROM service_log_performed_items slpi
+        LEFT JOIN maintenance_plan_items mpi ON slpi.maintenancePlanItemId = mpi.id
+        WHERE slpi.serviceLogId = ?
+      ''',
       [entry.id],
     );
-
-    List<String> displayNames =
-        performedItemMaps.map((map) {
-          return map['customItemName'] as String? ??
-              map['predefinedItemName'] as String? ??
-              'Unknown Item';
-        }).toList();
-
+    final List<String> displayNames = performedItemMaps.map((map) {
+      return map['customItemName'] as String? ??
+          map['predefinedItemName'] as String? ??
+          'Unknown Item';
+    }).toList();
     return ServiceLogWithItems(
       entry: entry,
       performedItemDisplayNames: displayNames,
@@ -326,23 +355,18 @@ class DatabaseHelper {
     final db = await database;
     int count = 0;
     await db.transaction((txn) async {
-      // Update the main log entry
       count = await txn.update(
         'service_log_entries',
         logEntry.toMap(),
         where: 'id = ?',
         whereArgs: [logEntry.id],
       );
-
-      // Delete old performed items for this log
       await txn.delete(
         'service_log_performed_items',
         where: 'serviceLogId = ?',
         whereArgs: [logEntry.id],
       );
-
-      // Insert new performed items
-      for (var itemInput in performedItems) {
+      for (final itemInput in performedItems) {
         await txn.insert('service_log_performed_items', {
           'serviceLogId': logEntry.id,
           'maintenancePlanItemId': itemInput.maintenancePlanItemId,
@@ -368,11 +392,11 @@ class DatabaseHelper {
     final db = await database;
     final List<Map<String, dynamic>> maps = await db.rawQuery(
       '''
-    SELECT slpi.serviceLogId, slpi.maintenancePlanItemId
-    FROM service_log_performed_items slpi
-    JOIN service_log_entries sle ON slpi.serviceLogId = sle.id
-    WHERE sle.vehicleId = ? AND slpi.maintenancePlanItemId IS NOT NULL
-  ''',
+        SELECT slpi.serviceLogId, slpi.maintenancePlanItemId
+        FROM service_log_performed_items slpi
+        JOIN service_log_entries sle ON slpi.serviceLogId = sle.id
+        WHERE sle.vehicleId = ? AND slpi.maintenancePlanItemId IS NOT NULL
+      ''',
       [vehicleId],
     );
     return maps
@@ -385,6 +409,53 @@ class DatabaseHelper {
         .toList();
   }
 
+  // ------------------- Fuel Record CRUD -------------------
+  /// Inserts a fuel record into the database and returns its new id.
+  Future<int> insertFuelRecord(FuelRecord record) async {
+    final db = await database;
+    final map = record.toMap()..remove('id');
+    return await db.insert(
+      'fuel_records',
+      map,
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  /// Fetches all fuel records for a given vehicle, ordered by date descending.
+  Future<List<FuelRecord>> getFuelRecordsForVehicle(int vehicleId) async {
+    final db = await database;
+    final List<Map<String, dynamic>> maps = await db.query(
+      'fuel_records',
+      where: 'vehicleId = ?',
+      whereArgs: [vehicleId],
+      orderBy: 'date DESC, id DESC',
+    );
+    return maps.map((map) => FuelRecord.fromMap(map)).toList();
+  }
+
+  /// Updates an existing fuel record.  Returns the number of rows affected.
+  Future<int> updateFuelRecord(FuelRecord record) async {
+    final db = await database;
+    return await db.update(
+      'fuel_records',
+      record.toMap(),
+      where: 'id = ?',
+      whereArgs: [record.id],
+    );
+  }
+
+  /// Deletes the fuel record with the specified id.  Returns the number of
+  /// rows deleted.
+  Future<int> deleteFuelRecord(int id) async {
+    final db = await database;
+    return await db.delete(
+      'fuel_records',
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  /// Closes the database.  Should be called on app exit.
   Future<void> close() async {
     final db = _database;
     if (db != null && db.isOpen) {
