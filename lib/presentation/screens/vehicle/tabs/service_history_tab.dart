@@ -347,22 +347,20 @@ class _ServiceHistoryTabState extends State<ServiceHistoryTab> {
                                           children: [
                                             Icon(
                                               Icons.delete_outline,
-                                              color:
-                                                  AppColors.urgentReminderText,
+                                              color: AppColors.urgentReminderText,
                                               size: 20,
                                             ),
                                             SizedBox(width: 8),
                                             Text(
-                                              AppLocalizations.of(
-                                                context,
-                                              )!.delete,
+                                              AppLocalizations.of(context)!.delete,
                                               style: TextStyle(
-                                                color:
-                                                    Theme.of(
-                                                      context,
-                                                    ).colorScheme.onSurface,
+                                                color: Theme.of(context).colorScheme.onSurface,
                                               ),
                                             ),
+                                          ],
+                                        ),
+                                      ),
+                                  
                                           
 // --- Fuel Records section ---
 const SizedBox(height: 16),
@@ -374,8 +372,9 @@ Padding(
     style: Theme.of(context).textTheme.titleMedium,
   ),
 ),
-FuelRecordsListSection(vehicleId: widget.vehicle.id!),
+FuelRecordsListSection(vehicleId: widget.vehicleId),
 // --- end Fuel Records section ---
+
 
 ],
                                         ),
