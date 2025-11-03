@@ -31,12 +31,10 @@ import 'package:carvita/presentation/manager/theme_provider.dart';
 import 'package:carvita/presentation/manager/upcoming_maintenance/upcoming_maintenance_cubit.dart';
 import 'package:carvita/presentation/manager/vehicle_list/vehicle_cubit.dart';
 import 'package:carvita/presentation/screens/common_widgets/main_bottom_navigation_bar.dart';
-import 'package:carvita/presentation/screens/settings/vehicle_fuel_import_tile.dart';
+import 'package:carvita/presentation/manager/vehicle_list/vehicle_state.dart' as vehicle_list_state_import;
+
+// NEW: compact vehicle import tile
 import 'package:carvita/presentation/screens/settings/vehicle_data_import_tile.dart';
-
-
-import 'package:carvita/presentation/manager/vehicle_list/vehicle_state.dart'
-    as vehicle_list_state_import;
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -54,17 +52,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _maintenanceRemindersEnabled = false;
   int _selectedLeadTimeDays = 7;
   final NotificationService _notificationService = NotificationService();
-  DueReminderThresholdValue _selectedThreshold =
-      DueReminderThresholdValue.halfYear;
+  DueReminderThresholdValue _selectedThreshold = DueReminderThresholdValue.halfYear;
   int _selectedReminderItemCount = 3;
   bool _isExporting = false;
   bool _isImporting = false;
-  PackageInfo _packageInfo = PackageInfo(
-    appName: '',
-    packageName: '',
-    version: '',
-    buildNumber: '',
-  );
+  PackageInfo _packageInfo = const PackageInfo(appName: '', packageName: '', version: '', buildNumber: '');
 
   @override
   void initState() {
@@ -84,9 +76,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final vehicleState = context.read<VehicleCubit>().state;
       Vehicle? vehicle;
       if (vehicleState is vehicle_list_state_import.VehicleLoaded) {
-        vehicle = vehicleState.vehicles.firstWhereOrNull(
-          (v) => v.id == defaultId,
-        );
+        vehicle = vehicleState.vehicles.firstWhereOrNull((v) => v.id == defaultId);
       }
       vehicle ??= await _vehicleRepository.getVehicleById(defaultId);
 
@@ -103,17 +93,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
     } else {
       if (mounted) {
-        setState(
-          () => _defaultVehicleName = AppLocalizations.of(context)!.notSet,
-        );
+        setState(() => _defaultVehicleName = AppLocalizations.of(context)!.notSet);
       }
     }
   }
 
-  Future<void> _showSelectDefaultVehicleDialog(
-    BuildContext context,
-    List<Vehicle> vehicles,
-  ) async {
+  Future<void> _showSelectDefaultVehicleDialog(BuildContext context, List<Vehicle> vehicles) async {
     int? newSelectedId = _currentDefaultVehicleId;
 
     final result = await showDialog<int?>(
@@ -122,84 +107,48 @@ class _SettingsScreenState extends State<SettingsScreen> {
         return StatefulBuilder(
           builder: (stfContext, stfSetState) {
             return AlertDialog(
-              backgroundColor:
-                  Theme.of(context).colorScheme.surfaceContainerLowest,
+              backgroundColor: Theme.of(context).colorScheme.surfaceContainerLowest,
               title: Text(
                 AppLocalizations.of(context)!.chooseDefaultVehicle,
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.onSurface,
-                  fontSize: 20,
-                ),
+                style: TextStyle(color: Theme.of(context).colorScheme.onSurface, fontSize: 20),
               ),
               contentPadding: const EdgeInsets.only(top: 10.0, bottom: 0),
               content: SizedBox(
                 width: double.maxFinite,
-                child:
-                    vehicles.isEmpty
-                        ? Padding(
-                          padding: EdgeInsets.symmetric(
-                            vertical: 20.0,
-                            horizontal: 24.0,
-                          ),
-                          child: Text(
-                            AppLocalizations.of(context)!.noVehicles,
-                            style: TextStyle(
-                              color: Theme.of(context).colorScheme.onSurface,
-                            ),
-                          ),
-                        )
-                        : ListView.builder(
-                          shrinkWrap: true,
-                          itemCount: vehicles.length,
-                          itemBuilder: (BuildContext context, int index) {
-                            final vehicle = vehicles[index];
-                            return RadioListTile<int?>(
-                              title: Text(
-                                vehicle.name,
-                                style: TextStyle(
-                                  color:
-                                      Theme.of(context).colorScheme.onSurface,
-                                ),
-                              ),
-                              value: vehicle.id,
-                              groupValue: newSelectedId,
-                              activeColor:
-                                  Theme.of(context).colorScheme.primary,
-                              onChanged: (int? value) {
-                                stfSetState(() {
-                                  newSelectedId = value;
-                                });
-                                Navigator.of(dialogContext).pop(newSelectedId);
-                              },
-                            );
-                          },
-                        ),
+                child: vehicles.isEmpty
+                    ? Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 20.0, horizontal: 24.0),
+                        child: Text(AppLocalizations.of(context)!.noVehicles,
+                            style: TextStyle(color: Theme.of(context).colorScheme.onSurface)),
+                      )
+                    : ListView.builder(
+                        shrinkWrap: true,
+                        itemCount: vehicles.length,
+                        itemBuilder: (BuildContext context, int index) {
+                          final vehicle = vehicles[index];
+                          return RadioListTile<int?>(
+                            title: Text(vehicle.name, style: TextStyle(color: Theme.of(context).colorScheme.onSurface)),
+                            value: vehicle.id,
+                            groupValue: newSelectedId,
+                            activeColor: Theme.of(context).colorScheme.primary,
+                            onChanged: (int? value) {
+                              stfSetState(() => newSelectedId = value);
+                              Navigator.of(dialogContext).pop(newSelectedId);
+                            },
+                          );
+                        },
+                      ),
               ),
               actionsAlignment: MainAxisAlignment.spaceBetween,
-              actionsPadding: const EdgeInsets.symmetric(
-                horizontal: 16.0,
-                vertical: 8.0,
-              ),
+              actionsPadding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
               actions: <Widget>[
                 TextButton(
-                  child: Text(
-                    AppLocalizations.of(context)!.clearDefault,
-                    style: TextStyle(color: AppColors.urgentReminderText),
-                  ),
-                  onPressed: () {
-                    Navigator.of(dialogContext).pop(null);
-                  },
+                  child: Text(AppLocalizations.of(context)!.clearDefault, style: const TextStyle(color: AppColors.urgentReminderText)),
+                  onPressed: () => Navigator.of(dialogContext).pop(null),
                 ),
                 TextButton(
-                  child: Text(
-                    AppLocalizations.of(context)!.cancel,
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.primary,
-                    ),
-                  ),
-                  onPressed: () {
-                    Navigator.of(dialogContext).pop(_currentDefaultVehicleId);
-                  },
+                  child: Text(AppLocalizations.of(context)!.cancel, style: TextStyle(color: Theme.of(context).colorScheme.primary)),
+                  onPressed: () => Navigator.of(dialogContext).pop(_currentDefaultVehicleId),
                 ),
               ],
             );
@@ -226,46 +175,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _showSelectReminderThresholdDialog(BuildContext context) async {
-    final DueReminderThresholdValue? result =
-        await showDialog<DueReminderThresholdValue>(
-          context: context,
-          builder: (BuildContext dialogContext) {
-            return SimpleDialog(
-              backgroundColor:
-                  Theme.of(context).colorScheme.surfaceContainerLowest,
-              title: Text(
-                AppLocalizations.of(context)!.chooseThreshold,
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.onSurface,
-                  fontSize: 20,
-                  fontWeight: FontWeight.w500,
+    final DueReminderThresholdValue? result = await showDialog<DueReminderThresholdValue>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return SimpleDialog(
+          backgroundColor: Theme.of(context).colorScheme.surfaceContainerLowest,
+          title: Text(
+            AppLocalizations.of(context)!.chooseThreshold,
+            style: TextStyle(color: Theme.of(context).colorScheme.onSurface, fontSize: 20, fontWeight: FontWeight.w500),
+          ),
+          children: DueReminderThresholdValue.values
+              .map(
+                (threshold) => SimpleDialogOption(
+                  onPressed: () => Navigator.pop(dialogContext, threshold),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12.0),
+                    child: Text(
+                      threshold.displayString(context),
+                      style: TextStyle(color: Theme.of(context).colorScheme.onSurface, fontSize: 16),
+                    ),
+                  ),
                 ),
-              ),
-              children:
-                  DueReminderThresholdValue.values.map((threshold) {
-                    return SimpleDialogOption(
-                      onPressed: () => Navigator.pop(dialogContext, threshold),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 12.0),
-                        child: Text(
-                          threshold.displayString(context),
-                          style: TextStyle(
-                            color: Theme.of(context).colorScheme.onSurface,
-                            fontSize: 16,
-                          ),
-                        ),
-                      ),
-                    );
-                  }).toList(),
-            );
-          },
+              )
+              .toList(),
         );
+      },
+    );
 
     if (result != null && result != _selectedThreshold) {
       await _preferencesService.setDueReminderThreshold(result);
-      if (mounted) {
-        setState(() => _selectedThreshold = result);
-      }
+      if (mounted) setState(() => _selectedThreshold = result);
     }
   }
 
@@ -278,37 +217,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
           backgroundColor: Theme.of(context).colorScheme.surfaceContainerLowest,
           title: Text(
             AppLocalizations.of(context)!.chooseDisplayItemCount,
-            style: TextStyle(
-              color: Theme.of(context).colorScheme.onSurface,
-              fontSize: 20,
-              fontWeight: FontWeight.w500,
-            ),
+            style: TextStyle(color: Theme.of(context).colorScheme.onSurface, fontSize: 20, fontWeight: FontWeight.w500),
           ),
-          children:
-              counts.map((count) {
-                return SimpleDialogOption(
+          children: counts
+              .map(
+                (count) => SimpleDialogOption(
                   onPressed: () => Navigator.pop(dialogContext, count),
                   child: Padding(
                     padding: const EdgeInsets.symmetric(vertical: 12.0),
                     child: Text(
                       AppLocalizations.of(context)!.itemCount(count),
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.onSurface,
-                        fontSize: 16,
-                      ),
+                      style: TextStyle(color: Theme.of(context).colorScheme.onSurface, fontSize: 16),
                     ),
                   ),
-                );
-              }).toList(),
+                ),
+              )
+              .toList(),
         );
       },
     );
 
     if (result != null && result != _selectedReminderItemCount) {
       await _preferencesService.setDueReminderItemCount(result);
-      if (mounted) {
-        setState(() => _selectedReminderItemCount = result);
-      }
+      if (mounted) setState(() => _selectedReminderItemCount = result);
     }
   }
 
@@ -316,9 +247,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (_isExporting) return;
     setState(() => _isExporting = true);
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(AppLocalizations.of(context)!.exportPrepare)),
-    );
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(AppLocalizations.of(context)!.exportPrepare)));
 
     try {
       final dbFolder = await getDatabasesPath();
@@ -328,10 +257,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (!await sourceDbFile.exists()) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(AppLocalizations.of(context)!.errDBNotFound),
-              backgroundColor: AppColors.urgentReminderText,
-            ),
+            SnackBar(content: Text(AppLocalizations.of(context)!.errDBNotFound), backgroundColor: AppColors.urgentReminderText),
           );
         }
         return;
@@ -339,51 +265,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
       final tempDir = await getTemporaryDirectory();
       final timestamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
-      final tempDbPath = path.join(
-        tempDir.path,
-        'carvita_backup_$timestamp.db',
-      );
+      final tempDbPath = path.join(tempDir.path, 'carvita_backup_$timestamp.db');
       final tempDbFile = await sourceDbFile.copy(tempDbPath);
 
-      final shareResult = await SharePlus.instance.share(
-        ShareParams(files: [XFile(tempDbFile.path)]),
-      );
+      final shareResult = await SharePlus.instance.share(ShareParams(files: [XFile(tempDbFile.path)]));
 
       if (shareResult.status == ShareResultStatus.success) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(AppLocalizations.of(context)!.exportSuccess),
-              backgroundColor: Colors.green,
-            ),
+            SnackBar(content: Text(AppLocalizations.of(context)!.exportSuccess), backgroundColor: Colors.green),
           );
         }
       } else if (shareResult.status == ShareResultStatus.dismissed) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(AppLocalizations.of(context)!.exportCancelled),
-            ),
-          );
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(AppLocalizations.of(context)!.exportCancelled)));
         }
       } else {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(shareResult.status.toString()),
-              backgroundColor: AppColors.urgentReminderText,
-            ),
+            SnackBar(content: Text(shareResult.status.toString()), backgroundColor: AppColors.urgentReminderText),
           );
         }
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(e.toString()),
-            backgroundColor: AppColors.urgentReminderText,
-          ),
-        );
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString()), backgroundColor: AppColors.urgentReminderText));
       }
     } finally {
       if (mounted) setState(() => _isExporting = false);
@@ -397,32 +303,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
       builder: (BuildContext dialogContext) {
         return AlertDialog(
           backgroundColor: Theme.of(context).colorScheme.surfaceContainerLowest,
-          title: Text(
-            AppLocalizations.of(context)!.restoreWarningTitle,
-            style: TextStyle(
-              color: Theme.of(context).colorScheme.onSurface,
-              fontSize: 20,
-            ),
-          ),
-          content: Text(
-            AppLocalizations.of(context)!.restoreWarningBody,
-            style: TextStyle(color: Theme.of(context).colorScheme.onSurface),
-          ),
+          title: Text(AppLocalizations.of(context)!.restoreWarningTitle,
+              style: TextStyle(color: Theme.of(context).colorScheme.onSurface, fontSize: 20)),
+          content: Text(AppLocalizations.of(context)!.restoreWarningBody,
+              style: TextStyle(color: Theme.of(context).colorScheme.onSurface)),
           actions: <Widget>[
             TextButton(
-              child: Text(
-                AppLocalizations.of(context)!.cancel,
-                style: TextStyle(color: Theme.of(context).colorScheme.primary),
-              ),
+              child: Text(AppLocalizations.of(context)!.cancel, style: TextStyle(color: Theme.of(context).colorScheme.primary)),
               onPressed: () => Navigator.of(dialogContext).pop(false),
             ),
             TextButton(
               child: Text(
                 AppLocalizations.of(context)!.restoreData,
-                style: TextStyle(
-                  color: AppColors.urgentReminderText,
-                  fontWeight: FontWeight.bold,
-                ),
+                style: const TextStyle(color: AppColors.urgentReminderText, fontWeight: FontWeight.bold),
               ),
               onPressed: () => Navigator.of(dialogContext).pop(true),
             ),
@@ -436,9 +329,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     setState(() => _isImporting = true);
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(AppLocalizations.of(context)!.chooseDBFile)),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(AppLocalizations.of(context)!.chooseDBFile)));
     }
 
     try {
@@ -465,28 +356,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
             barrierDismissible: false,
             builder: (BuildContext dialogContext) {
               return AlertDialog(
-                backgroundColor:
-                    Theme.of(context).colorScheme.surfaceContainerLowest,
-                title: Text(
-                  AppLocalizations.of(context)!.restoreSuccessTitle,
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.onSurface,
-                  ),
-                ),
-                content: Text(
-                  AppLocalizations.of(context)!.restoreSuccessBody,
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.onSurface,
-                  ),
-                ),
+                backgroundColor: Theme.of(context).colorScheme.surfaceContainerLowest,
+                title: Text(AppLocalizations.of(context)!.restoreSuccessTitle,
+                    style: TextStyle(color: Theme.of(context).colorScheme.onSurface)),
+                content: Text(AppLocalizations.of(context)!.restoreSuccessBody,
+                    style: TextStyle(color: Theme.of(context).colorScheme.onSurface)),
                 actions: <Widget>[
                   TextButton(
                     child: Text(
                       AppLocalizations.of(context)!.exitButton,
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.primary,
-                        fontWeight: FontWeight.bold,
-                      ),
+                      style: TextStyle(color: Theme.of(context).colorScheme.primary, fontWeight: FontWeight.bold),
                     ),
                     onPressed: () {
                       Navigator.of(dialogContext).pop();
@@ -500,21 +379,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
         }
       } else {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(AppLocalizations.of(context)!.importCancelled),
-            ),
-          );
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(AppLocalizations.of(context)!.importCancelled)));
         }
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(e.toString()),
-            backgroundColor: AppColors.urgentReminderText,
-          ),
-        );
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString()), backgroundColor: AppColors.urgentReminderText));
       }
       await DatabaseHelper().database;
     } finally {
@@ -533,64 +403,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  Future<void> _showSelectReminderLeadTimeDialog(BuildContext context) async {
-    final List<int> leadTimeOptions =
-        PreferencesService.reminderLeadTimeOptionsInDays;
-
-    final int? result = await showDialog<int>(
-      context: context,
-      builder: (BuildContext dialogContext) {
-        return SimpleDialog(
-          backgroundColor: Theme.of(context).colorScheme.surfaceContainerLowest,
-          title: Text(
-            AppLocalizations.of(context)!.chooseLeadTime,
-            style: TextStyle(
-              color: Theme.of(context).colorScheme.onSurface,
-              fontSize: 20,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-          children:
-              leadTimeOptions.map((days) {
-                return SimpleDialogOption(
-                  onPressed: () => Navigator.pop(dialogContext, days),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 12.0),
-                    child: Text(
-                      AppLocalizations.of(context)!.notificationLeadTime(days),
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.onSurface,
-                        fontSize: 16,
-                      ),
-                    ),
-                  ),
-                );
-              }).toList(),
-        );
-      },
-    );
-
-    if (result != null && result != _selectedLeadTimeDays) {
-      await _preferencesService.setReminderLeadTimeDays(result);
-      if (mounted) {
-        setState(() => _selectedLeadTimeDays = result);
-        _triggerNotificationReschedule();
-      }
-    }
-  }
-
-  void _triggerNotificationReschedule({AppLocalizations? l10n}) {
-    context
-        .read<UpcomingMaintenanceCubit>()
-        .rescheduleNotificationsBasedOnNewSettings(
-          l10n ?? AppLocalizations.of(context),
-        );
-  }
-
-  Future<void> _showSelectMileageUnitDialog(
-    BuildContext context,
-    LocaleProvider localeProvider,
-  ) async {
+  Future<void> _showSelectMileageUnitDialog(BuildContext context, LocaleProvider localeProvider) async {
     final List<String> units = ['km', 'mi'];
     String currentSelection = localeProvider.mileageUnit;
 
@@ -599,37 +412,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
       builder: (BuildContext dialogContext) {
         return SimpleDialog(
           backgroundColor: Theme.of(context).colorScheme.surfaceContainerLowest,
-          title: Text(
-            AppLocalizations.of(context)!.chooseMileageUnit,
-            style: TextStyle(
-              color: Theme.of(context).colorScheme.onSurface,
-              fontSize: 20,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-          children:
-              units.map((unit) {
-                return SimpleDialogOption(
+          title: Text(AppLocalizations.of(context)!.chooseMileageUnit,
+              style: TextStyle(color: Theme.of(context).colorScheme.onSurface, fontSize: 20, fontWeight: FontWeight.w500)),
+          children: units
+              .map(
+                (unit) => SimpleDialogOption(
                   onPressed: () => Navigator.pop(dialogContext, unit),
                   child: Padding(
                     padding: const EdgeInsets.symmetric(vertical: 12.0),
                     child: Text(
                       AppLocalizations.of(context)!.mileageUnit(unit),
                       style: TextStyle(
-                        color:
-                            (currentSelection == unit)
-                                ? Theme.of(context).colorScheme.primary
-                                : Theme.of(context).colorScheme.onSurface,
+                        color: (currentSelection == unit) ? Theme.of(context).colorScheme.primary : Theme.of(context).colorScheme.onSurface,
                         fontSize: 16,
-                        fontWeight:
-                            (currentSelection == unit)
-                                ? FontWeight.bold
-                                : FontWeight.normal,
+                        fontWeight: (currentSelection == unit) ? FontWeight.bold : FontWeight.normal,
                       ),
                     ),
                   ),
-                );
-              }).toList(),
+                ),
+              )
+              .toList(),
         );
       },
     );
@@ -640,22 +442,77 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  Widget _buildSettingsCard({
-    required String title,
-    required List<Widget> children,
-  }) {
+  Future<void> _initPackageInfo() async {
+    final info = await PackageInfo.fromPlatform();
+    setState(() {
+      _packageInfo = info;
+    });
+  }
+
+  void _showColorPicker(BuildContext context, ThemeProvider themeProvider) {
+    Color pickerColor = themeProvider.customSeedColor ?? Theme.of(context).colorScheme.primary;
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text(AppLocalizations.of(context)!.chooseColor, style: TextStyle(color: Theme.of(context).colorScheme.onSurface, fontSize: 20, fontWeight: FontWeight.w500)),
+          content: SingleChildScrollView(
+            child: ColorPicker(pickerColor: pickerColor, onColorChanged: (color) => pickerColor = color, enableAlpha: false, pickerAreaHeightPercent: 0.8),
+          ),
+          actions: <Widget>[
+            TextButton(child: Text(AppLocalizations.of(context)!.cancel), onPressed: () => Navigator.of(context).pop()),
+            TextButton(child: Text(AppLocalizations.of(context)!.ok), onPressed: () { themeProvider.setCustomSeedColor(pickerColor); Navigator.of(context).pop(); }),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _showSelectThemeDialog(BuildContext context, ThemeProvider themeProvider) async {
+    final AppThemePreference? result = await showDialog<AppThemePreference>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return SimpleDialog(
+          backgroundColor: Theme.of(context).colorScheme.surface,
+          title: Text(AppLocalizations.of(context)!.chooseTheme, style: TextStyle(color: Theme.of(context).colorScheme.onSurface, fontSize: 20, fontWeight: FontWeight.w500)),
+          children: AppThemePreference.values
+              .map(
+                (preference) => SimpleDialogOption(
+                  onPressed: () => Navigator.pop(dialogContext, preference),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12.0),
+                    child: Text(
+                      preference.displayString(context),
+                      style: TextStyle(
+                        color: themeProvider.themePreference == preference ? Theme.of(context).colorScheme.primary : Theme.of(context).colorScheme.onSurface,
+                        fontSize: 16,
+                        fontWeight: themeProvider.themePreference == preference ? FontWeight.bold : FontWeight.normal,
+                      ),
+                    ),
+                  ),
+                ),
+              )
+              .toList(),
+        );
+      },
+    );
+
+    if (result != null) {
+      themeProvider.setThemePreference(result);
+      if (result == AppThemePreference.custom && themeProvider.customSeedColor == null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => _showColorPicker(context, themeProvider));
+      }
+    }
+  }
+
+  Widget _buildSettingsCard({required String title, required List<Widget> children}) {
     return Card(
       color: Theme.of(context).colorScheme.surfaceContainerLowest,
       margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 9),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       elevation: 2,
       child: Padding(
-        padding: const EdgeInsets.only(
-          left: 18.0,
-          right: 18.0,
-          top: 5.0,
-          bottom: 5.0,
-        ),
+        padding: const EdgeInsets.only(left: 18.0, right: 18.0, top: 5.0, bottom: 5.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -663,13 +520,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               padding: const EdgeInsets.only(top: 10.0, bottom: 0.0),
               child: Text(
                 title.toUpperCase(),
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                  color: Theme.of(
-                    context,
-                  ).colorScheme.onSurface.withValues(alpha: 0.6),
-                ),
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6)),
               ),
             ),
             ...children,
@@ -689,221 +540,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return ListTile(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       contentPadding: EdgeInsets.zero,
-      leading: Icon(
-        icon,
-        color: Theme.of(context).colorScheme.primary,
-        size: 22,
-      ),
-      title: Text(
-        label,
-        style: TextStyle(
-          fontSize: 16,
-          color: Theme.of(context).colorScheme.onSurface,
-        ),
-      ),
-      subtitle:
-          value != null
-              ? Text(
-                value,
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Theme.of(
-                    context,
-                  ).colorScheme.onSurface.withValues(alpha: 0.7),
-                ),
-              )
-              : null,
-      trailing:
-          trailing ??
+      leading: Icon(icon, color: Theme.of(context).colorScheme.primary, size: 22),
+      title: Text(label, style: TextStyle(fontSize: 16, color: Theme.of(context).colorScheme.onSurface)),
+      subtitle: value != null
+          ? Text(value, style: TextStyle(fontSize: 14, color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.7)))
+          : null,
+      trailing: trailing ??
           (onTap != null
-              ? Icon(
-                Icons.chevron_right,
-                color: Theme.of(
-                  context,
-                ).colorScheme.onSurface.withValues(alpha: 0.5),
-              )
+              ? Icon(Icons.chevron_right, color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5))
               : null),
       onTap: onTap,
     );
   }
 
-  Future<void> _showSelectLanguageDialog(
-    BuildContext context,
-    LocaleProvider localeProvider,
-  ) async {
-    final List<Map<String, dynamic>> supportedLanguages = [
-      {
-        'locale': null,
-        'name': LocaleProvider.getLocaleDisplayString(null, context),
-      },
-      ...appSupportedLocales,
-    ];
-
-    Locale? currentSelection = localeProvider.appLocale;
-
-    final Locale? result = await showDialog<Locale?>(
-      context: context,
-      builder: (BuildContext dialogContext) {
-        return SimpleDialog(
-          backgroundColor: Theme.of(context).colorScheme.surfaceContainerLowest,
-          title: Text(
-            AppLocalizations.of(context)!.chooseLanguage,
-            style: TextStyle(
-              color: Theme.of(context).colorScheme.onSurface,
-              fontSize: 20,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-          children:
-              supportedLanguages.map((lang) {
-                Locale? langLocale = lang['locale'] as Locale?;
-                String langName = lang['name'] as String;
-                return SimpleDialogOption(
-                  onPressed: () => Navigator.pop(dialogContext, langLocale),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 12.0),
-                    child: Text(
-                      langName,
-                      style: TextStyle(
-                        color:
-                            (currentSelection?.toLanguageTag() ==
-                                        langLocale?.toLanguageTag()) ||
-                                    (currentSelection == null &&
-                                        langLocale == null)
-                                ? Theme.of(context).colorScheme.primary
-                                : Theme.of(context).colorScheme.onSurface,
-                        fontSize: 16,
-                        fontWeight:
-                            (currentSelection?.toLanguageTag() ==
-                                        langLocale?.toLanguageTag()) ||
-                                    (currentSelection == null &&
-                                        langLocale == null)
-                                ? FontWeight.bold
-                                : FontWeight.normal,
-                      ),
-                    ),
-                  ),
-                );
-              }).toList(),
-        );
-      },
-    );
-
-    if (result != localeProvider.appLocale) {
-      await localeProvider.setLocale(result);
-      if (mounted) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) {
-            _triggerNotificationReschedule(l10n: AppLocalizations.of(context));
-          }
-        });
-      }
-    }
-  }
-
-  Future<void> _initPackageInfo() async {
-    final info = await PackageInfo.fromPlatform();
-    setState(() {
-      _packageInfo = info;
-    });
-  }
-
-  void _showColorPicker(BuildContext context, ThemeProvider themeProvider) {
-    Color pickerColor =
-        themeProvider.customSeedColor ?? Theme.of(context).colorScheme.primary;
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: Text(
-            AppLocalizations.of(context)!.chooseColor,
-            style: TextStyle(
-              color: Theme.of(context).colorScheme.onSurface,
-              fontSize: 20,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-          content: SingleChildScrollView(
-            child: ColorPicker(
-              pickerColor: pickerColor,
-              onColorChanged: (color) => pickerColor = color,
-              enableAlpha: false,
-              pickerAreaHeightPercent: 0.8,
-            ),
-          ),
-          actions: <Widget>[
-            TextButton(
-              child: Text(AppLocalizations.of(context)!.cancel),
-              onPressed: () {
-                Navigator.of(context).pop();
-              },
-            ),
-            TextButton(
-              child: Text(AppLocalizations.of(context)!.ok),
-              onPressed: () {
-                themeProvider.setCustomSeedColor(pickerColor);
-                Navigator.of(context).pop();
-              },
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Future<void> _showSelectThemeDialog(
-    BuildContext context,
-    ThemeProvider themeProvider,
-  ) async {
-    final AppThemePreference? result = await showDialog<AppThemePreference>(
-      context: context,
-      builder: (BuildContext dialogContext) {
-        return SimpleDialog(
-          backgroundColor: Theme.of(context).colorScheme.surface,
-          title: Text(
-            AppLocalizations.of(context)!.chooseTheme,
-            style: TextStyle(
-              color: Theme.of(context).colorScheme.onSurface,
-              fontSize: 20,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-          children:
-              AppThemePreference.values.map((preference) {
-                return SimpleDialogOption(
-                  onPressed: () => Navigator.pop(dialogContext, preference),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 12.0),
-                    child: Text(
-                      preference.displayString(context),
-                      style: TextStyle(
-                        color:
-                            themeProvider.themePreference == preference
-                                ? Theme.of(context).colorScheme.primary
-                                : Theme.of(context).colorScheme.onSurface,
-                        fontSize: 16,
-                        fontWeight:
-                            themeProvider.themePreference == preference
-                                ? FontWeight.bold
-                                : FontWeight.normal,
-                      ),
-                    ),
-                  ),
-                );
-              }).toList(),
-        );
-      },
-    );
-
-    if (result != null) {
-      themeProvider.setThemePreference(result);
-      if (result == AppThemePreference.custom &&
-          themeProvider.customSeedColor == null) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _showColorPicker(context, themeProvider);
-        });
-      }
-    }
+  void _triggerNotificationReschedule({AppLocalizations? l10n}) {
+    context.read<UpcomingMaintenanceCubit>().rescheduleNotificationsBasedOnNewSettings(l10n ?? AppLocalizations.of(context));
   }
 
   @override
@@ -920,9 +571,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         appBar: AppBar(
           automaticallyImplyLeading: false,
           title: Text(AppLocalizations.of(context)!.navSettings),
-          backgroundColor: Theme.of(
-            context,
-          ).colorScheme.inverseSurface.withValues(alpha: 0.1),
+          backgroundColor: Theme.of(context).colorScheme.inverseSurface.withValues(alpha: 0.1),
           elevation: 0,
         ),
         body: ListView(
@@ -938,32 +587,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     value: _maintenanceRemindersEnabled,
                     onChanged: (bool value) async {
                       if (!value) {
-                        await _preferencesService.setNotificationsEnabled(
-                          value,
-                        );
+                        await _preferencesService.setNotificationsEnabled(value);
                         setState(() => _maintenanceRemindersEnabled = value);
                         await _notificationService.cancelAllNotifications();
                       } else {
-                        bool notificationsEnabled =
-                            await _notificationService.checkPermissions();
+                        bool notificationsEnabled = await _notificationService.checkPermissions();
                         if (!notificationsEnabled) {
                           if (context.mounted) {
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(
-                                content: Text(
-                                  AppLocalizations.of(
-                                    context,
-                                  )!.errNotificationPermission,
-                                ),
+                                content: Text(AppLocalizations.of(context)!.errNotificationPermission),
                                 backgroundColor: AppColors.urgentReminderText,
                               ),
                             );
                           }
                           return;
                         }
-                        await _preferencesService.setNotificationsEnabled(
-                          value,
-                        );
+                        await _preferencesService.setNotificationsEnabled(value);
                         setState(() => _maintenanceRemindersEnabled = value);
                         _triggerNotificationReschedule();
                       }
@@ -973,11 +613,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 _buildSettingItem(
                   icon: Icons.schedule_outlined,
-                  label:
-                      AppLocalizations.of(context)!.notificationLeadTimeLabel,
-                  value: AppLocalizations.of(
-                    context,
-                  )!.notificationLeadTime(_selectedLeadTimeDays),
+                  label: AppLocalizations.of(context)!.notificationLeadTimeLabel,
+                  value: AppLocalizations.of(context)!.notificationLeadTime(_selectedLeadTimeDays),
                   onTap: () => _showSelectReminderLeadTimeDialog(context),
                 ),
               ],
@@ -988,36 +625,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _buildSettingItem(
                   icon: Icons.star_border_purple500_outlined,
                   label: AppLocalizations.of(context)!.defaultVehicle,
-                  value:
-                      _currentDefaultVehicleId == null
-                          ? AppLocalizations.of(context)!.notSet
-                          : _defaultVehicleName,
+                  value: _currentDefaultVehicleId == null ? AppLocalizations.of(context)!.notSet : _defaultVehicleName,
                   onTap: () {
-                    if (vehicleState
-                        is vehicle_list_state_import.VehicleLoaded) {
+                    if (vehicleState is vehicle_list_state_import.VehicleLoaded) {
                       if (vehicleState.vehicles.isNotEmpty) {
-                        _showSelectDefaultVehicleDialog(
-                          context,
-                          vehicleState.vehicles,
-                        );
+                        _showSelectDefaultVehicleDialog(context, vehicleState.vehicles);
                       } else {
                         ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              AppLocalizations.of(context)!.noVehicles,
-                            ),
-                            backgroundColor:
-                                Theme.of(context).colorScheme.primary,
-                          ),
+                          SnackBar(content: Text(AppLocalizations.of(context)!.noVehicles), backgroundColor: Theme.of(context).colorScheme.primary),
                         );
                       }
                     } else {
                       ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(AppLocalizations.of(context)!.loading),
-                          backgroundColor:
-                              Theme.of(context).colorScheme.primary,
-                        ),
+                        SnackBar(content: Text(AppLocalizations.of(context)!.loading), backgroundColor: Theme.of(context).colorScheme.primary),
                       );
                       context.read<VehicleCubit>().fetchVehicles();
                     }
@@ -1032,9 +652,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _buildSettingItem(
                   icon: Icons.checklist_outlined,
                   label: AppLocalizations.of(context)!.reminderDisplayItemCount,
-                  value: AppLocalizations.of(
-                    context,
-                  )!.itemCount(_selectedReminderItemCount),
+                  value: AppLocalizations.of(context)!.itemCount(_selectedReminderItemCount),
                   onTap: () => _showSelectReminderItemCountDialog(context),
                 ),
               ],
@@ -1046,18 +664,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   icon: Icons.language_outlined,
                   label: AppLocalizations.of(context)!.language,
                   value: localeProvider.getCurrentLocaleDisplayString(context),
-                  onTap:
-                      () => _showSelectLanguageDialog(context, localeProvider),
+                  onTap: () => _showSelectLanguageDialog(context, localeProvider),
                 ),
                 _buildSettingItem(
                   icon: Icons.straighten_outlined,
                   label: AppLocalizations.of(context)!.mileageUnitLabel,
-                  value: AppLocalizations.of(
-                    context,
-                  )!.mileageUnit(localeProvider.mileageUnit),
-                  onTap:
-                      () =>
-                          _showSelectMileageUnitDialog(context, localeProvider),
+                  value: AppLocalizations.of(context)!.mileageUnit(localeProvider.mileageUnit),
+                  onTap: () => _showSelectMileageUnitDialog(context, localeProvider),
                 ),
                 _buildSettingItem(
                   icon: Icons.brightness_6_outlined,
@@ -1073,13 +686,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       width: 24,
                       height: 24,
                       decoration: BoxDecoration(
-                        color:
-                            themeProvider.customSeedColor ??
-                            Theme.of(context).colorScheme.primary,
+                        color: themeProvider.customSeedColor ?? Theme.of(context).colorScheme.primary,
                         shape: BoxShape.circle,
-                        border: Border.all(
-                          color: Theme.of(context).colorScheme.outline,
-                        ),
+                        border: Border.all(color: Theme.of(context).colorScheme.outline),
                       ),
                     ),
                     onTap: () => _showColorPicker(context, themeProvider),
@@ -1089,30 +698,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _buildSettingsCard(
               title: AppLocalizations.of(context)!.data,
               children: [
-                // New import tile
-                //const VehicleFuelImportTile(),
                 const VehicleDataImportTile(),
-
                 _buildSettingItem(
                   icon: Icons.cloud_download_outlined,
                   label: AppLocalizations.of(context)!.restoreData,
                   onTap: _isImporting ? null : _importDatabase,
-                  trailing:
-                      _isImporting
-                          ? SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Theme.of(context).colorScheme.primary,
-                            ),
-                          )
-                          : Icon(
-                            Icons.chevron_right,
-                            color: Theme.of(
-                              context,
-                            ).colorScheme.onSurface.withValues(alpha: 0.5),
-                          ),
+                  trailing: _isImporting
+                      ? SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Theme.of(context).colorScheme.primary),
+                        )
+                      : Icon(Icons.chevron_right, color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5)),
                 ),
                 _buildSettingItem(
                   icon: Icons.ios_share_outlined,
@@ -1120,11 +717,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onTap: _isExporting ? null : _exportDatabase,
                   trailing: _isExporting
                       ? SizedBox(
-                          width: 20, height: 20,
+                          width: 20,
+                          height: 20,
                           child: CircularProgressIndicator(strokeWidth: 2, color: Theme.of(context).colorScheme.primary),
                         )
                       : Icon(Icons.chevron_right, color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5)),
-                ),
                 ),
               ],
             ),
@@ -1140,7 +737,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   icon: Icons.help_outline,
                   label: AppLocalizations.of(context)!.helpAndSupport,
                   onTap: () {
-                    final url = Uri.parse('https://github.com/samirugamage/carvita');
+                    final url = Uri.parse('https://github.com/JeziL/carvita');
                     launchUrl(url);
                   },
                 ),
@@ -1158,26 +755,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ThemeData theme = Theme.of(context);
                     Navigator.of(context).push(
                       MaterialPageRoute<void>(
-                        builder:
-                            (context) => Theme(
-                              data: theme.copyWith(
-                                appBarTheme: theme.appBarTheme.copyWith(
-                                  titleTextStyle: theme
-                                      .appBarTheme
-                                      .titleTextStyle
-                                      ?.copyWith(
-                                        color: theme.colorScheme.onSurface,
-                                      ),
-                                  iconTheme: IconThemeData(
-                                    color:
-                                        Theme.of(context).colorScheme.onSurface,
-                                  ),
-                                ),
-                              ),
-                              child: LicensePage(
-                                applicationVersion: _packageInfo.version,
-                              ),
+                        builder: (context) => Theme(
+                          data: theme.copyWith(
+                            appBarTheme: theme.appBarTheme.copyWith(
+                              titleTextStyle: theme.appBarTheme.titleTextStyle?.copyWith(color: theme.colorScheme.onSurface),
+                              iconTheme: IconThemeData(color: Theme.of(context).colorScheme.onSurface),
                             ),
+                          ),
+                          child: LicensePage(applicationVersion: _packageInfo.version),
+                        ),
                       ),
                     );
                   },
@@ -1186,9 +772,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ],
         ),
-        bottomNavigationBar: const MainBottomNavigationBar(
-          currentIndex: 3,
-        ),
+        bottomNavigationBar: const MainBottomNavigationBar(currentIndex: 3),
       ),
     );
   }
