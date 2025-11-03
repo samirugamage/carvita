@@ -3,26 +3,17 @@ import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:csv/csv.dart';
 import 'package:intl/intl.dart';
-import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'package:carvita/data/models/fuel_record.dart';
 import 'package:carvita/data/models/service_log_entry.dart';
 import 'package:carvita/data/repositories/fuel_repository.dart';
 import 'package:carvita/data/sources/local/database_helper.dart';
 import 'package:carvita/presentation/manager/vehicle_list/vehicle_cubit.dart';
-import 'package:carvita/presentation/manager/vehicle_list/vehicle_state.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 
-/// A compact ListTile that lets you choose a vehicle and import one CSV.
-/// Supports multi-section CSV with headers like:
-///   ##Refuelling
-///   "Odometer (km)","Date","Fuel","Price / L","Total cost","Volume",...
-///   ##Expense
-///   "Odometer (km)","Date","Total cost","Type of expense",...
-///   ##Service
-///   "Odometer (km)","Date","Total cost","Type of service",...
-///
-/// Fuel rows will be saved to fuel_records.
-/// Expense + Service rows will be saved to service_log_entries.
+/// Compact tile to pick a vehicle and import a single CSV.
+/// Imports Fuel rows and Maintenance/Expense rows.
+/// Assumes camelCase DB columns (vehicleId, serviceDate, mileageAtService, ...).
 class VehicleDataImportTile extends StatefulWidget {
   const VehicleDataImportTile({super.key});
 
@@ -37,10 +28,10 @@ class _VehicleDataImportTileState extends State<VehicleDataImportTile> {
 
   Future<void> _pickVehicle(BuildContext context) async {
     final vehicleState = context.read<VehicleCubit>().state;
-    List<dynamic> vehicles = [];
-    if (vehicleState is VehicleLoaded) {
-      vehicles = vehicleState.vehicles;
-    }
+    final vehicles = switch (vehicleState) {
+      final VehicleLoaded s => s.vehicles,
+      _ => <dynamic>[],
+    };
 
     if (vehicles.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -52,7 +43,7 @@ class _VehicleDataImportTileState extends State<VehicleDataImportTile> {
     final selected = await showDialog<(int, String)?>(
       context: context,
       builder: (ctx) {
-        int? tempId = _vehicleId ?? vehicles.first.id as int?;
+        int? tempId = _vehicleId ?? vehicles.first.id;
         return AlertDialog(
           title: const Text('Choose vehicle'),
           content: StatefulBuilder(
@@ -61,7 +52,7 @@ class _VehicleDataImportTileState extends State<VehicleDataImportTile> {
               value: tempId,
               items: [
                 for (final v in vehicles)
-                  DropdownMenuItem(value: v.id as int, child: Text(v.name as String)),
+                  DropdownMenuItem(value: v.id, child: Text(v.name)),
               ],
               onChanged: (val) => setSt(() => tempId = val),
             ),
@@ -100,209 +91,143 @@ class _VehicleDataImportTileState extends State<VehicleDataImportTile> {
     );
     if (picked == null || picked.files.isEmpty) return;
 
-    final p = picked.files.first.path;
-    if (p == null) return;
+    final path = picked.files.first.path;
+    if (path == null) return;
 
     setState(() => _busy = true);
+
     int fuelCount = 0;
     int maintCount = 0;
 
     try {
-      final text = await File(p).readAsString();
-      final lines = text.split(RegExp(r'\r?\n'));
-
-      final csv = const CsvToListConverter(shouldParseNumbers: false);
-
-      String mode = ''; // 'fuel' 'expense' 'service'
-      List<String> header = [];
-      Map<String, int> idx = {};
-
-      FuelRepository fuelRepo = FuelRepository(dbHelper: DatabaseHelper());
-
-      String? headerLineBuffer;
-
-      String? nextNonEmptyLine(List<String> ls, int start) {
-        for (int i = start; i < ls.length; i++) {
-          final t = ls[i].trim();
-          if (t.isNotEmpty) return ls[i];
+      final text = await File(path).readAsString();
+      final rows = const CsvToListConverter(
+        eol: '\n',
+        shouldParseNumbers: false,
+      ).convert(text);
+      if (rows.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('CSV is empty')));
         }
-        return null;
+        return;
       }
 
-      for (int i = 0; i < lines.length; i++) {
-        final raw = lines[i];
-        final line = raw.trim();
-        if (line.isEmpty) {
-          continue;
+      // Header normalization
+      final header = rows.first.map((e) => _normalizeKey(e.toString())).toList();
+      final idx = Map<String, int>.fromEntries(
+        header.asMap().entries.map((e) => MapEntry(header[e.key], e.key)),
+      );
+
+      // Useful hints
+      final hasFuelHints = header.contains('volume') ||
+          header.contains('price_per_l') ||
+          header.contains('total_cost') ||
+          header.contains('liters') ||
+          header.contains('litres');
+
+      final hasMaintHints = header.contains('mileage') ||
+          header.contains('mileage_km') ||
+          header.contains('odometer') ||
+          header.contains('items') ||
+          header.contains('notes') ||
+          header.contains('cost') ||
+          header.contains('type_of_expense') ||
+          header.contains('expense');
+
+      // Also respect an explicit Type column if present
+      final hasTypeCol = header.contains('type');
+
+      final fuelRepo = FuelRepository(dbHelper: DatabaseHelper());
+
+      for (int r = 1; r < rows.length; r++) {
+        final rawCells = rows[r];
+        final cells = rawCells.map((e) => e?.toString().trim() ?? '').toList();
+        if (cells.every((c) => c.isEmpty)) continue;
+
+        final rowType = _get(cells, idx, ['type'])?.toLowerCase();
+
+        DateTime? when = _parseDate(_get(cells, idx, ['date', 'datetime']));
+        String? items = _get(cells, idx, ['items', 'item', 'services', 'type_of_expense', 'expense']);
+        String? notes = _get(cells, idx, ['notes', 'note', 'remark', 'remarks']);
+
+        final mileageStr = _get(cells, idx, ['mileage', 'mileage_km', 'odometer', 'odo']);
+        final mileage = _toDouble(mileageStr);
+
+        // Fuel fields
+        final volume = _toDouble(_get(cells, idx, ['volume', 'liters', 'litres', 'qty']));
+        final pricePerL = _toDouble(_get(cells, idx, ['price_per_l', 'price/l', 'price']));
+        final totalCost = _toDouble(_get(cells, idx, ['total_cost', 'amount', 'cost', 'price_total']));
+        final fullTank = _truthy(_get(cells, idx, ['is_full_tank', 'full', 'full_tank']));
+
+        // Decide row type
+        bool isFuelRow = false;
+        bool isMaintRow = false;
+
+        if (hasTypeCol) {
+          if (rowType == 'fuel' || rowType == 'gas' || rowType == 'refuel') isFuelRow = true;
+          if (rowType == 'service' || rowType == 'maintenance' || rowType == 'expense') isMaintRow = true;
+        } else {
+          isFuelRow = hasFuelHints && (volume != null || pricePerL != null || totalCost != null);
+          isMaintRow = hasMaintHints && (mileage != null || items != null || notes != null || totalCost != null);
         }
 
-        // Section start
-        if (line.startsWith('##')) {
-          final tag = line.substring(2).trim().toLowerCase();
-          if (tag.startsWith('refuelling')) {
-            mode = 'fuel';
-          } else if (tag.startsWith('expense')) {
-            mode = 'expense';
-          } else if (tag.startsWith('service')) {
-            mode = 'service';
-          } else {
-            mode = '';
-          }
-          // reset header for new section
-          header = [];
-          idx = {};
-          // The next non-empty line should be the header
-          headerLineBuffer = nextNonEmptyLine(lines, i + 1);
-          if (headerLineBuffer != null) {
-            final parsed = csv.convert(headerLineBuffer!);
-            if (parsed.isNotEmpty) {
-              header = parsed.first.map((e) => e.toString()).toList();
-              idx = _buildIndex(header);
-            }
-          }
-          continue;
-        }
-
-        // If we do not have a header yet in current mode try to parse this as header
-        if (mode.isNotEmpty && header.isEmpty) {
-          final parsed = csv.convert(line);
-          if (parsed.isNotEmpty) {
-            header = parsed.first.map((e) => e.toString()).toList();
-            idx = _buildIndex(header);
-            continue;
-          }
-        }
-
-        // If there is no current mode or no header skip
-        if (mode.isEmpty || header.isEmpty) {
-          continue;
-        }
-
-        // Stop if this looks like a new section by mistake
-        if (line.startsWith('##')) {
-          // loop will pick this up as a new section on next iteration
-          continue;
-        }
-
-        // Parse this row
-        final parsed = csv.convert(raw);
-        if (parsed.isEmpty) continue;
-        final row = parsed.first.map((e) => (e ?? '').toString()).toList();
-
-        // Skip lines that are blank in all useful columns
-        final joined = row.join('').trim();
-        if (joined.isEmpty) continue;
-
-        if (mode == 'fuel') {
-          final when = _parseDate(_val(row, idx, ['date']));
-          final odometer = _toDouble(_val(row, idx, [
-                'odometer',
-                'odometer_km',
-                'odometer_(km)',
-                'km',
-                'mileage',
-              ])) ??
-              0.0;
-
-          // Volume and price
-          final volume = _toDouble(_val(row, idx, ['volume', 'liters', 'litres', 'qty']));
-          final pricePerL = _toDouble(_val(row, idx, [
-            'price_per_l',
-            'price_l',
-            'price__l',
-            'price___l',
-            'price_liter',
-            'price_litre',
-            'price',
-          ]));
-          final totalCost = _toDouble(_val(row, idx, [
-            'total_cost',
-            'totalcost',
-            'total',
-            'amount',
-            'cost',
-          ]));
-
-          // full tank field if present
-          final fullTankStr = _val(row, idx, ['full_tank', 'full', 'is_full_tank', 'filled_full']);
-          final isFullTank = _truthy(fullTankStr);
-
-          final anyFuelHints = (volume != null) || (pricePerL != null) || (totalCost != null);
-          if (!anyFuelHints) {
-            // It might be a non-fuel line under refuelling, skip
-            continue;
-          }
-
-          double volFinal = volume ?? 0.0;
-          if ((volFinal == 0.0) && pricePerL != null && totalCost != null && pricePerL > 0) {
-            volFinal = totalCost / pricePerL;
+        if (isFuelRow) {
+          when ??= DateTime.now();
+          double? vol = volume;
+          if ((vol == null || vol == 0) && pricePerL != null && totalCost != null && pricePerL > 0) {
+            vol = totalCost / pricePerL;
           }
 
           final record = FuelRecord(
             id: null,
             vehicleId: _vehicleId!,
-            date: when ?? DateTime.now(),
-            odometer: odometer,
-            volume: volFinal,
+            date: when,
+            odometer: mileage ?? 0,
+            volume: vol ?? 0,
             pricePerL: pricePerL,
             totalCost: totalCost,
-            isFullTank: isFullTank,
+            isFullTank: fullTank,
           );
 
           await fuelRepo.addFuelRecord(record);
           fuelCount++;
-        } else if (mode == 'expense' || mode == 'service') {
-          final when = _parseDate(_val(row, idx, ['date'])) ?? DateTime.now();
-          final odometer = _toDouble(_val(row, idx, [
-            'odometer',
-            'odometer_km',
-            'odometer_(km)',
-            'km',
-            'mileage',
-          ])) ??
-              0.0;
+          continue;
+        }
 
-          final cost = _toDouble(_val(row, idx, [
-            'total_cost',
-            'totalcost',
-            'total',
-            'amount',
-            'cost',
-          ]));
+        if (isMaintRow) {
+          when ??= DateTime.now();
+          final cost = totalCost;
 
-          final typ = _val(
-            row,
-            idx,
-            mode == 'expense' ? ['type_of_expense', 'expense_type'] : ['type_of_service', 'service_type'],
-          );
-          final notes = _val(row, idx, ['notes', 'note', 'remark', 'remarks']);
-
+          // Merge item type + notes into a single display field
           final mergedNotes = [
-            if (typ != null && typ.trim().isNotEmpty) 'Type: $typ',
-            if (notes != null && notes.trim().isNotEmpty) notes!,
-          ].join(' | ').trim();
+            if (items != null && items.isNotEmpty) 'Type: $items',
+            if (notes != null && notes.isNotEmpty) 'Notes: $notes',
+          ].join(' | ');
 
           final entry = ServiceLogEntry(
             id: null,
             vehicleId: _vehicleId!,
             serviceDate: when,
-            mileageAtService: odometer,
+            mileageAtService: (mileage ?? 0).toDouble(),
             cost: cost,
             notes: mergedNotes.isEmpty ? null : mergedNotes,
           );
 
-          await _insertServiceLogEntry(entry);
+          await _insertServiceLogEntry(entry); // camelCase columns
           maintCount++;
+          continue;
         }
+
+        // Unknown line, skip silently
       }
+
+      // Refresh vehicle mileage from both tables using camelCase columns
+      await _refreshVehicleMileage(_vehicleId!);
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Imported: $fuelCount fuel, $maintCount maintenance')),
+        SnackBar(content: Text('Imported: $fuelCount fuel, $maintCount maintenance/expenses')),
       );
-
-      // Refresh vehicle list in UI
-      context.read<VehicleCubit>().fetchVehicles();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -316,64 +241,69 @@ class _VehicleDataImportTileState extends State<VehicleDataImportTile> {
   @override
   Widget build(BuildContext context) {
     final label = _vehicleName == null ? 'Vehicle: Not set' : 'Vehicle: $_vehicleName';
-    return ListTile(
-      leading: Icon(Icons.upload_file, color: Theme.of(context).colorScheme.primary),
-      title: const Text('Import vehicle data (Fuel + Maintenance)'),
-      subtitle: Text(label),
-      contentPadding: EdgeInsets.zero,
-      trailing: _busy
-          ? SizedBox(
-              width: 20,
-              height: 20,
-              child: CircularProgressIndicator(strokeWidth: 2, color: Theme.of(context).colorScheme.primary),
-            )
-          : Wrap(
-              spacing: 8,
-              runSpacing: 4,
-              alignment: WrapAlignment.end,
+
+    // Layout puts buttons under the title to avoid squeezing title on narrow screens.
+    return Card(
+      color: Theme.of(context).colorScheme.surfaceContainerLowest,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      margin: const EdgeInsets.only(top: 8, bottom: 8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ListTile(
+              dense: false,
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(Icons.upload_file, color: Theme.of(context).colorScheme.primary),
+              title: const Text('Import vehicle data (Fuel + Maintenance)'),
+              subtitle: Text(label),
+            ),
+            const SizedBox(height: 6),
+            Row(
               children: [
                 OutlinedButton(
-                  onPressed: () => _pickVehicle(context),
+                  onPressed: _busy ? null : () => _pickVehicle(context),
                   child: const Text('Choose vehicle'),
                 ),
+                const SizedBox(width: 8),
                 FilledButton(
-                  onPressed: () => _importCsv(context),
-                  child: const Text('Import CSV'),
+                  onPressed: _busy ? null : () => _importCsv(context),
+                  child: _busy
+                      ? SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Theme.of(context).colorScheme.onPrimary,
+                          ),
+                        )
+                      : const Text('Import CSV'),
                 ),
               ],
             ),
-      onTap: () => _pickVehicle(context),
+          ],
+        ),
+      ),
     );
   }
 
-  // ------------- helpers -------------
+  // ---------------- helpers ----------------
 
-  // Build a case-insensitive, normalized header index
-  Map<String, int> _buildIndex(List<String> header) {
-    final map = <String, int>{};
-    for (int i = 0; i < header.length; i++) {
-      final raw = header[i].trim();
-      final lower = raw.toLowerCase();
-      final norm = _norm(lower);
-      map[lower] = i;
-      map[norm] = i;
-    }
-    return map;
+  static String _normalizeKey(String s) {
+    final t = s.trim().toLowerCase();
+    // unify common variants
+    return t
+        .replaceAll(' ', '_')
+        .replaceAll('-', '_')
+        .replaceAll('/', '_');
   }
 
-  // Normalize header keys: lower case, non-alnum to underscore, collapse underscores
-  String _norm(String s) {
-    final t = s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '_');
-    return t.replaceAll(RegExp(r'_+'), '_').replaceAll(RegExp(r'^_+|_+$'), '');
-  }
-
-  // Try variants of keys across normalized and raw lower-case
-  String? _val(List<String> row, Map<String, int> idx, List<String> keys) {
-    for (final k in keys) {
-      final n = _norm(k);
-      final j = idx[n] ?? idx[k.toLowerCase()];
-      if (j != null && j < row.length) {
-        final v = row[j].toString().trim();
+  String? _get(List<String> row, Map<String, int> idx, List<String> keys) {
+    for (final k in keys.map(_normalizeKey)) {
+      final i = idx[k];
+      if (i != null && i < row.length) {
+        final v = row[i].trim();
         if (v.isNotEmpty) return v;
       }
     }
@@ -382,11 +312,9 @@ class _VehicleDataImportTileState extends State<VehicleDataImportTile> {
 
   DateTime? _parseDate(String? s) {
     if (s == null || s.isEmpty) return null;
-    final cands = <String>[
-      'yyyy-MM-dd HH:mm:ss',
+    final cands = [
       'yyyy-MM-dd HH:mm',
       'yyyy-MM-dd',
-      'dd/MM/yyyy HH:mm:ss',
       'dd/MM/yyyy',
       'MM/dd/yyyy',
       'yyyy/MM/dd',
@@ -398,7 +326,7 @@ class _VehicleDataImportTileState extends State<VehicleDataImportTile> {
         return DateFormat(fmt).parseStrict(s);
       } catch (_) {}
     }
-    // Try unix ms
+    // try epoch ms
     try {
       final ms = int.parse(s);
       return DateTime.fromMillisecondsSinceEpoch(ms);
@@ -408,15 +336,12 @@ class _VehicleDataImportTileState extends State<VehicleDataImportTile> {
 
   double? _toDouble(String? s) {
     if (s == null || s.isEmpty) return null;
-    // Remove currency and spaces and thousands separators
-    final t = s.replaceAll(RegExp(r'[^\d\.\-]'), '');
-    // If there are multiple dots because of thousands separator, keep the last one
-    if ('.'.allMatches(t).length > 1) {
-      final last = t.lastIndexOf('.');
-      final cleaned = t.replaceAll('.', '');
-      final withDot = cleaned.substring(0, last) + '.' + cleaned.substring(last);
-      return double.tryParse(withDot);
-    }
+    final t = s
+        .replaceAll(',', '')
+        .replaceAll('LKR', '')
+        .replaceAll('Rs', '')
+        .replaceAll('usd', '')
+        .trim();
     return double.tryParse(t);
   }
 
@@ -426,15 +351,53 @@ class _VehicleDataImportTileState extends State<VehicleDataImportTile> {
     return t == '1' || t == 'true' || t == 'yes' || t == 'y';
   }
 
-  /// Minimal direct insert for ServiceLogEntry using DatabaseHelper.
+  /// Direct insert using camelCase column names to match your DB schema.
   Future<void> _insertServiceLogEntry(ServiceLogEntry e) async {
     final db = await DatabaseHelper().database;
     await db.insert('service_log_entries', {
-      'vehicle_id': e.vehicleId,
-      'service_date': e.serviceDate.millisecondsSinceEpoch,
-      'mileage_at_service': e.mileageAtService,
+      'vehicleId': e.vehicleId,
+      'serviceDate': e.serviceDate.toIso8601String(),
+      'mileageAtService': e.mileageAtService,
       'cost': e.cost,
       'notes': e.notes,
     });
+  }
+
+  /// Recompute and persist the vehicle's mileage using MAX across both tables.
+  Future<void> _refreshVehicleMileage(int vehicleId) async {
+    final db = await DatabaseHelper().database;
+
+    // fuel_records likely uses camelCase 'vehicleId'
+    final fr = await db.rawQuery(
+      'SELECT MAX(odometer) AS m FROM fuel_records WHERE vehicleId = ?',
+      [vehicleId],
+    );
+    final sr = await db.rawQuery(
+      'SELECT MAX(mileageAtService) AS m FROM service_log_entries WHERE vehicleId = ?',
+      [vehicleId],
+    );
+
+    double maxFuelOdo = 0;
+    double maxSvcOdo = 0;
+
+    final mf = fr.isNotEmpty ? fr.first['m'] : null;
+    if (mf is int) maxFuelOdo = mf.toDouble();
+    if (mf is double) maxFuelOdo = mf;
+
+    final ms = sr.isNotEmpty ? sr.first['m'] : null;
+    if (ms is int) maxSvcOdo = ms.toDouble();
+    if (ms is double) maxSvcOdo = ms;
+
+    final newMileage = [maxFuelOdo, maxSvcOdo].reduce((a, b) => a > b ? a : b);
+
+    await db.update(
+      'vehicles',
+      {
+        'mileage': newMileage,
+        'mileage_last_updated': DateTime.now().toIso8601String(),
+      },
+      where: 'id = ?',
+      whereArgs: [vehicleId],
+    );
   }
 }
