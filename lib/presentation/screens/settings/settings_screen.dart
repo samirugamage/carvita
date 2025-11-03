@@ -1118,22 +1118,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   icon: Icons.ios_share_outlined,
                   label: AppLocalizations.of(context)!.exportData,
                   onTap: _isExporting ? null : _exportDatabase,
-                  trailing:
-                      _isExporting
-                          ? SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Theme.of(context).colorScheme.primary,
-                            ),
-                          )
-                          : Icon(
-                            Icons.chevron_right,
-                            color: Theme.of(
-                              context,
-                            ).colorScheme.onSurface.withValues(alpha: 0.5),
-                          ),
+                  trailing: _isExporting
+                      ? SizedBox(
+                          width: 20, height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Theme.of(context).colorScheme.primary),
+                        )
+                      : Icon(Icons.chevron_right, color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5)),
+                ),
                 ),
               ],
             ),
@@ -1149,7 +1140,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   icon: Icons.help_outline,
                   label: AppLocalizations.of(context)!.helpAndSupport,
                   onTap: () {
-                    final url = Uri.parse('https://github.com/JeziL/carvita');
+                    final url = Uri.parse('https://github.com/samirugamage/carvita');
                     launchUrl(url);
                   },
                 ),

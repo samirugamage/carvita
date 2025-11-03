@@ -1,3 +1,4 @@
+import 'dart:developer' as dev;
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -10,15 +11,10 @@ import 'package:carvita/data/models/fuel_record.dart';
 import 'package:carvita/data/models/service_log_entry.dart';
 import 'package:carvita/data/repositories/fuel_repository.dart';
 import 'package:carvita/data/sources/local/database_helper.dart';
-import 'package:carvita/data/repositories/vehicle_repository.dart';
 import 'package:carvita/presentation/manager/vehicle_list/vehicle_cubit.dart';
 import 'package:carvita/presentation/manager/vehicle_list/vehicle_state.dart';
 
-/// Single tile that lets you choose a vehicle and import one CSV.
-/// It imports both fuel rows and maintenance rows.
-///
-/// Fuel rows are recognized if any of: volume, price_per_l, total_cost
-/// Maintenance rows are recognized if any of: mileage/odometer, cost, items, notes
+/// List-tile that lets you pick a vehicle and import **Fuel + Maintenance** CSV.
 class VehicleDataImportTile extends StatefulWidget {
   const VehicleDataImportTile({super.key});
 
@@ -32,59 +28,74 @@ class _VehicleDataImportTileState extends State<VehicleDataImportTile> {
   bool _busy = false;
 
   Future<void> _pickVehicle(BuildContext context) async {
-    final vehicleState = context.read<VehicleCubit>().state;
-    List<dynamic> vehicles = [];
-    if (vehicleState is VehicleLoaded) {
-      vehicles = vehicleState.vehicles;
-    }
+    final state = context.read<VehicleCubit>().state;
+    final vehicles = state is VehicleLoaded ? state.vehicles : <dynamic>[];
 
     if (vehicles.isEmpty) {
-      // Ask cubit to fetch if not loaded yet
       context.read<VehicleCubit>().fetchVehicles();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No vehicles. Please add a vehicle first.')),
-        );
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No vehicles. Add one first.')),
+      );
       return;
     }
 
     int? tempId = _vehicleId ?? vehicles.first.id as int?;
     final selected = await showDialog<int?>(
       context: context,
-      builder: (ctx) {
-        return AlertDialog(
-          title: const Text('Choose vehicle'),
-          content: StatefulBuilder(
-            builder: (ctx, setSt) => DropdownButton<int>(
-              isExpanded: true,
-              value: tempId,
-              items: [
-                for (final v in vehicles)
-                  DropdownMenuItem<int>(value: v.id as int, child: Text(v.name as String)),
-              ],
-              onChanged: (val) => setSt(() => tempId = val),
-            ),
+      builder: (ctx) => AlertDialog(
+        title: const Text('Choose vehicle'),
+        content: StatefulBuilder(
+          builder: (_, setSt) => DropdownButton<int>(
+            isExpanded: true,
+            value: tempId,
+            items: [
+              for (final v in vehicles)
+                DropdownMenuItem<int>(value: v.id as int, child: Text(v.name)),
+            ],
+            onChanged: (val) => setSt(() => tempId = val),
           ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, tempId),
-              child: const Text('Select'),
-            ),
-          ],
-        );
-      },
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, tempId), child: const Text('Select')),
+        ],
+      ),
     );
 
     if (selected != null && mounted) {
       final v = vehicles.firstWhere((x) => x.id == selected);
       setState(() {
-        _vehicleId = selected;
-        _vehicleName = v.name as String?;
+        _vehicleId  = selected;
+        _vehicleName = v.name;
       });
     }
   }
+
+  @override
+  Widget build(BuildContext context) {
+    final subtitle = _vehicleName == null ? 'Vehicle: Not set' : 'Vehicle: $_vehicleName';
+    return ListTile(
+      leading: Icon(Icons.upload_file, color: Theme.of(context).colorScheme.primary),
+      title: const Text('Import data'),
+      subtitle: Text('$subtitle  •  Fuel + Maintenance'),
+      contentPadding: EdgeInsets.zero,
+      trailing: _busy
+          ? SizedBox(
+              width: 20, height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2, color: Theme.of(context).colorScheme.primary),
+            )
+          : Wrap(
+              spacing: 8,
+              children: [
+                OutlinedButton(onPressed: () => _pickVehicle(context), child: const Text('Choose')),
+                FilledButton(onPressed: () => _importCsv(context), child: const Text('CSV')),
+              ],
+            ),
+      onTap: () => _pickVehicle(context),
+    );
+  }
+
+  // ───────────────────────── CSV IMPORT ─────────────────────────
 
   Future<void> _importCsv(BuildContext context) async {
     if (_vehicleId == null) {
@@ -92,222 +103,143 @@ class _VehicleDataImportTileState extends State<VehicleDataImportTile> {
       if (_vehicleId == null) return;
     }
 
-    final picked = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['csv'],
-    );
+    final picked = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['csv']);
     if (picked == null || picked.files.isEmpty) return;
 
     final path = picked.files.first.path;
     if (path == null) return;
 
     setState(() => _busy = true);
-    int fuelCount = 0;
-    int maintCount = 0;
+    int fuelCnt = 0, maintCnt = 0;
 
     try {
-      final text = await File(path).readAsString();
-      final rows = const CsvToListConverter(
-        eol: '\n',
-        shouldParseNumbers: false,
-      ).convert(text);
-      if (rows.isEmpty) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('CSV is empty')));
-        }
-        return;
-      }
+      final raw = await File(path).readAsString();
+      final txt  = _stripBom(raw);
+      final delim = _sniffDelimiter(txt);
+      final decComma = delim != ',';           // Excel “;” CSV → decimal comma
+      final rows = CsvToListConverter(
+        fieldDelimiter: delim, shouldParseNumbers: false, eol: _sniffEol(txt),
+      ).convert(txt);
 
-      final header = rows.first.map((e) => e.toString().trim().toLowerCase()).toList();
-      final idx = Map<String, int>.fromEntries(
-        header.asMap().entries.map((e) => MapEntry(header[e.key], e.key)),
-      );
+      if (rows.isEmpty) return _snack('CSV is empty');
 
-      final hasFuelHints = header.contains('volume') || header.contains('price_per_l') || header.contains('total_cost');
-      final hasMaintHints = header.contains('mileage') || header.contains('mileage_km') || header.contains('odometer')
-          || header.contains('items') || header.contains('notes') || header.contains('cost');
+      // ── header map
+      final header = rows.first.map((e) => _normHeader(e)).toList();
+      final idx = { for (var i = 0; i < header.length; i++) header[i] : i };
+
+      final fuelHint = _hasAny(header, ['volume','price_per_l','total_cost','amount']);
+      final maintHint= _hasAny(header, ['mileage','odometer','items','notes','cost']);
 
       final fuelRepo = FuelRepository(dbHelper: DatabaseHelper());
 
-      for (int r = 1; r < rows.length; r++) {
+      for (var r = 1; r < rows.length; r++) {
         final cells = rows[r].map((e) => (e ?? '').toString().trim()).toList();
         if (cells.every((c) => c.isEmpty)) continue;
 
-        DateTime? when = _parseDate(_get(cells, idx, ['date', 'datetime']));
-        String? items = _get(cells, idx, ['items', 'item', 'services']);
-        String? notes = _get(cells, idx, ['notes', 'note', 'remark', 'remarks']);
+        DateTime? when = _parseDate(_val(cells, idx,['date','datetime']));
+        final items = _val(cells, idx,['items','services']);
+        final notes = _val(cells, idx,['notes','remark']);
+        final mileage = _toNum(_val(cells, idx,['mileage','odometer']), decComma);
 
-        final mileageStr = _get(cells, idx, ['mileage', 'mileage_km', 'odometer', 'odo']);
-        final mileage = _toDouble(mileageStr);
+        final volume    = _toNum(_val(cells, idx,['volume','liters','qty']), decComma);
+        final pricePerL = _toNum(_val(cells, idx,['price_per_l','price/l','price']), decComma);
+        final totalCost = _toNum(_val(cells, idx,['total_cost','amount','cost']), decComma);
+        final fullTank  = _truthy(_val(cells, idx,['is_full_tank','full']));
 
-        // Fuel fields
-        final volume = _toDouble(_get(cells, idx, ['volume', 'liters', 'litres', 'qty']));
-        final pricePerL = _toDouble(_get(cells, idx, ['price_per_l', 'price/l', 'price']));
-        final totalCost = _toDouble(_get(cells, idx, ['total_cost', 'amount', 'cost']));
-        final fullTank = _truthy(_get(cells, idx, ['is_full_tank', 'full', 'full_tank']));
+        final fuelRow  = fuelHint  && (volume!=null || pricePerL!=null || totalCost!=null);
+        final maintRow = maintHint && (mileage!=null||items!=null||notes!=null);
 
-        final isFuelRow = hasFuelHints && (volume != null || pricePerL != null || totalCost != null);
-        final isMaintRow = hasMaintHints && (mileage != null || items != null || notes != null);
-
-        if (isFuelRow) {
-          // Default date if missing
+        if (fuelRow) {
           when ??= DateTime.now();
-
-          // compute volume if missing and we have price * total
           double? vol = volume;
-          if ((vol == null || vol == 0) && pricePerL != null && totalCost != null && pricePerL > 0) {
-            vol = totalCost / pricePerL;
+          if ((vol==null||vol==0) && pricePerL!=null && totalCost!=null && pricePerL>0) {
+            vol = totalCost/pricePerL;
           }
-
-          final record = FuelRecord(
-            id: null,
-            vehicleId: _vehicleId!,
-            date: when,
-            odometer: mileage ?? 0,
-            volume: vol ?? 0,
-            pricePerL: pricePerL,
-            totalCost: totalCost,
-            isFullTank: fullTank,
-          );
-
-          await fuelRepo.addFuelRecord(record);
-          fuelCount++;
-        } else if (isMaintRow) {
-          // Default date if missing
+          await fuelRepo.addFuelRecord(FuelRecord(
+            id:null, vehicleId:_vehicleId!, date:when,
+            odometer: mileage??0, volume: vol??0,
+            pricePerL: pricePerL, totalCost: totalCost, isFullTank: fullTank,
+          ));
+          fuelCnt++;
+        } else if (maintRow) {
           when ??= DateTime.now();
-          final cost = totalCost;
-
-          // merge item names into notes so they display in history
           final mergedNotes = [
-            if (items != null && items.isNotEmpty) 'Items: $items',
-            if (notes != null && notes.isNotEmpty) notes,
+            if(items?.isNotEmpty??false) 'Items: $items',
+            if(notes?.isNotEmpty??false) notes,
           ].join(' | ').trim();
-
-          final entry = ServiceLogEntry(
-            id: null,
-            vehicleId: _vehicleId!,
-            serviceDate: when,
-            mileageAtService: (mileage ?? 0).toDouble(),
-            cost: cost,
-            notes: mergedNotes.isEmpty ? null : mergedNotes,
-          );
-
-          await _insertServiceLogEntry(entry);
-          maintCount++;
-        } else {
-          // Skip line that doesn't look like either
+          await _insertServiceLog(ServiceLogEntry(
+            id:null, vehicleId:_vehicleId!, serviceDate:when,
+            mileageAtService:(mileage??0).toDouble(), cost:totalCost,
+            notes: mergedNotes.isEmpty?null:mergedNotes,
+          ));
+          maintCnt++;
         }
       }
 
-      // Recompute and update vehicle mileage without calling unknown repository methods
-      await _recomputeMileageFromRecords(_vehicleId!);
+      await _recomputeMileage(_vehicleId!);
+      if (mounted) context.read<VehicleCubit>().fetchVehicles();
 
-      // Refresh vehicle list on UI
-      if (mounted) {
-        context.read<VehicleCubit>().fetchVehicles();
-      }
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Imported: $fuelCount fuel, $maintCount maintenance')),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Import failed: $e')),
-      );
+      _snack('Imported: $fuelCnt fuel, $maintCnt maintenance');
+    } catch (e,st) {
+      dev.log('import failed', name:'import', error:e, stackTrace:st);
+      _snack('Import failed: $e');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final label = _vehicleName == null ? 'Vehicle: Not set' : 'Vehicle: $_vehicleName';
-    return ListTile(
-      leading: Icon(Icons.upload_file, color: Theme.of(context).colorScheme.primary),
-      title: const Text('Import vehicle data'),
-      subtitle: Text('$label  •  Fuel + Maintenance'),
-      contentPadding: EdgeInsets.zero,
-      trailing: _busy
-          ? SizedBox(
-              width: 20, height: 20,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                color: Theme.of(context).colorScheme.primary,
-              ),
-            )
-          : Wrap(
-              spacing: 8,
-              children: [
-                OutlinedButton(
-                  onPressed: () => _pickVehicle(context),
-                  child: const Text('Choose vehicle'),
-                ),
-                FilledButton(
-                  onPressed: () => _importCsv(context),
-                  child: const Text('Import CSV'),
-                ),
-              ],
-            ),
-      onTap: () => _pickVehicle(context),
-    );
+  // ───────────────────────── LOW-LEVEL HELPERS ─────────────────────────
+
+  void _snack(String m) { if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m))); }
+
+  String _stripBom(String s)=> s.isNotEmpty&&s.codeUnitAt(0)==0xFEFF?s.substring(1):s;
+  String _sniffDelimiter(String txt){
+    final l=txt.split(RegExp(r'\r\n|\n|\r')).firstOrNull??txt;
+    final c=_cnt(l,','), sc=_cnt(l,';'), t=_cnt(l,'\t');
+    if(sc>c&&sc>=t) return ';'; if(t>c&&t>=sc) return '\t'; return ',';
   }
+  String _sniffEol(String txt)=> txt.contains('\r\n')?'\r\n':txt.contains('\n')?'\n':'\r';
+  int _cnt(String s,String k){var c=0,i=0;while((i=s.indexOf(k,i))!=-1){c++;i++;}return c;}
 
-  // ---------------- helpers ----------------
-
-  String? _get(List<String> row, Map<String, int> idx, List<String> keys) {
-    for (final k in keys) {
-      final i = idx[k];
-      if (i != null && i < row.length) {
-        final v = row[i].trim();
-        if (v.isNotEmpty) return v;
-      }
+  String _normHeader(dynamic h){
+    final s=(h??'').toString().trim().toLowerCase();
+    switch(s){
+      case 'price/l': case 'price l': return 'price_per_l';
+      case 'liters': case 'litres': case 'qty': return 'volume';
+      case 'amount': return 'total_cost';
+      case 'mileage_km': case 'odo': return 'odometer';
+      default: return s;
     }
+  }
+  bool _hasAny(List<String> h,List<String> k)=> k.any(h.contains);
+  String? _val(List<String> row, Map<String,int> idx, List<String> keys){
+    for(final k in keys){ final i=idx[k]; if(i!=null&&i<row.length){final v=row[i]; if(v.isNotEmpty) return v;}}
     return null;
   }
 
-  DateTime? _parseDate(String? s) {
-    if (s == null || s.isEmpty) return null;
-    final fmts = <String>[
-      'yyyy-MM-dd HH:mm',
-      'yyyy-MM-dd',
-      'dd/MM/yyyy',
-      'MM/dd/yyyy',
-      'yyyy/MM/dd',
-      'dd-MM-yyyy',
-      'yyyy.MM.dd',
-    ];
-    for (final f in fmts) {
-      try {
-        return DateFormat(f).parseStrict(s);
-      } catch (_) {}
+  DateTime? _parseDate(String? s){
+    if(s==null||s.isEmpty) return null;
+    for(final f in ['yyyy-MM-dd HH:mm','yyyy-MM-dd','dd/MM/yyyy','MM/dd/yyyy','yyyy/MM/dd','dd-MM-yyyy']){
+      try{ return DateFormat(f).parseStrict(s);}catch(_){}
     }
-    // maybe epoch ms
-    try {
-      final ms = int.parse(s);
-      return DateTime.fromMillisecondsSinceEpoch(ms);
-    } catch (_) {}
+    try{ return DateTime.fromMillisecondsSinceEpoch(int.parse(s));}catch(_){}
     return null;
   }
-
-  double? _toDouble(String? s) {
-    if (s == null || s.isEmpty) return null;
-    final t = s.replaceAll(',', '').replaceAll('LKR', '').trim();
+  double? _toNum(String? s,{required bool decComma}){
+    if(s==null||s.isEmpty) return null;
+    var t=s.replaceAll(RegExp(r'[^0-9,.\-]'),'');
+    if(decComma){
+      if(!t.contains('.')&&t.contains(',')) t=t.replaceAll(',','.');
+      else t=t.replaceAll(',','');
+    } else { t=t.replaceAll(',',''); }
     return double.tryParse(t);
-    }
-
-  bool _truthy(String? s) {
-    if (s == null) return false;
-    final t = s.trim().toLowerCase();
-    return t == '1' || t == 'true' || t == 'yes' || t == 'y';
   }
+  bool _truthy(String? s)=> s!=null && ['1','true','yes','y'].contains(s.trim().toLowerCase());
 
-  /// Minimal direct insert for ServiceLogEntry using DatabaseHelper.
-  Future<void> _insertServiceLogEntry(ServiceLogEntry e) async {
-    final db = await DatabaseHelper().database;
+  Future<void> _insertServiceLog(ServiceLogEntry e) async {
+    final db=await DatabaseHelper().database;
     await db.insert('service_log_entries', {
-      'vehicle_id': e.vehicleId,
+      'vehicleId': e.vehicleId,                // ← camelCase
       'service_date': e.serviceDate.millisecondsSinceEpoch,
       'mileage_at_service': e.mileageAtService,
       'cost': e.cost,
@@ -315,61 +247,26 @@ class _VehicleDataImportTileState extends State<VehicleDataImportTile> {
     });
   }
 
-  /// Recompute mileage as the max of fuel.odometer and service_log.mileage_at_service,
-  /// then update the vehicle row.
-  Future<void> _recomputeMileageFromRecords(int vehicleId) async {
-    final db = await DatabaseHelper().database;
+  Future<void> _recomputeMileage(int vid) async {
+    final db=await DatabaseHelper().database;
+    double maxFuel=0,maxMaint=0;
 
-    double maxFuel = 0;
-    double maxMaint = 0;
+    try{
+      final fr=await db.rawQuery('SELECT MAX(odometer) AS m FROM fuel_records WHERE vehicleId=?',[vid]);
+      if(fr.isNotEmpty&&fr.first['m']!=null) maxFuel = (fr.first['m'] as num).toDouble();
+    }catch(_){}
+    try{
+      final sr=await db.rawQuery('SELECT MAX(mileage_at_service) AS m FROM service_log_entries WHERE vehicleId=?',[vid]);
+      if(sr.isNotEmpty&&sr.first['m']!=null) maxMaint = (sr.first['m'] as num).toDouble();
+    }catch(_){}
 
-    // max from fuel_records
-    final fr = await db.rawQuery(
-      'SELECT MAX(odometer) AS m FROM fuel_records WHERE vehicle_id = ?',
-      [vehicleId],
-    );
-    if (fr.isNotEmpty && fr.first['m'] != null) {
-      final v = fr.first['m'];
-      if (v is int) maxFuel = v.toDouble();
-      if (v is double) maxFuel = v;
-    }
-
-    // max from service_log_entries
-    final sr = await db.rawQuery(
-      'SELECT MAX(mileage_at_service) AS m FROM service_log_entries WHERE vehicle_id = ?',
-      [vehicleId],
-    );
-    if (sr.isNotEmpty && sr.first['m'] != null) {
-      final v = sr.first['m'];
-      if (v is int) maxMaint = v.toDouble();
-      if (v is double) maxMaint = v;
-    }
-
-    final newMileage = maxFuel > maxMaint ? maxFuel : maxMaint;
-
-    // update vehicles.mileage if greater than current
-    try {
-      final cur = await db.rawQuery(
-        'SELECT mileage FROM vehicles WHERE id = ?',
-        [vehicleId],
-      );
-      double currentMileage = 0;
-      if (cur.isNotEmpty && cur.first['mileage'] != null) {
-        final v = cur.first['mileage'];
-        if (v is int) currentMileage = v.toDouble();
-        if (v is double) currentMileage = v;
+    final newMiles = maxFuel>maxMaint?maxFuel:maxMaint;
+    try{
+      final cur=await db.rawQuery('SELECT mileage FROM vehicles WHERE id=?',[vid]);
+      final current = cur.isNotEmpty && cur.first['mileage']!=null ? (cur.first['mileage'] as num).toDouble():0;
+      if(newMiles>0 && newMiles!=current){
+        await db.update('vehicles', {'mileage':newMiles}, where:'id=?', whereArgs:[vid]);
       }
-
-      if (newMileage >= 0 && newMileage != currentMileage) {
-        await db.update(
-          'vehicles',
-          {'mileage': newMileage},
-          where: 'id = ?',
-          whereArgs: [vehicleId],
-        );
-      }
-    } catch (_) {
-      // If vehicles table or mileage column differ, silently ignore
-    }
+    }catch(_){}
   }
 }
